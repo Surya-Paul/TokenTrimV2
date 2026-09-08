@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./dist/preload",
+    "rootDir": "./src/preload",
+    "module": "NodeNext"
+  },
+  "include": ["src/preload/**/*"]
+}

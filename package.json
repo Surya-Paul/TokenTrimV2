@@ -1,0 +1,29 @@
+{
+  "name": "tokentrim",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Model-aware, local-first LLM input optimization engine",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm --filter @tokentrim/desktop dev",
+    "build": "pnpm -r run build --filter=@tokentrim/desktop...",
+    "build:all": "pnpm -r run build",
+    "test": "pnpm run test -r",
+    "test:unit": "pnpm run test:unit -r",
+    "test:integration": "pnpm run test:integration -r",
+    "test:security": "pnpm run test:security -r",
+    "lint": "pnpm run lint -r",
+    "typecheck": "pnpm run typecheck -r",
+    "benchmark": "pnpm run benchmark -r",
+    "prepare": "husky install"
+  },
+  "devDependencies": {
+    "husky": "^9.0.11",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "packageManager": "pnpm@9.4.0"
+}

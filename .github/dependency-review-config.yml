@@ -1,0 +1,39 @@
+# Dependency Review Configuration
+
+# Fail on vulnerabilities with these severities
+fail-on-severity: high, critical
+
+# Allow these licenses
+allow-licenses:
+  - MIT
+  - Apache-2.0
+  - BSD-2-Clause
+  - BSD-3-Clause
+  - ISC
+  - CC0-1.0
+  - Unlicense
+
+# Deny these licenses
+deny-licenses:
+  - GPL-2.0
+  - GPL-3.0
+  - AGPL-3.0
+  - LGPL-2.0
+  - LGPL-3.0
+
+# Allow these scopes
+allow-scopes:
+  - dependencies
+  - devDependencies
+  - optionalDependencies
+  - peerDependencies
+
+# Deny these scopes
+deny-scopes: []
+
+# Ignore these packages (false positives)
+ignore-packages:
+  - "@types/node"
+  - "typescript"
+  - "vitest"
+  - "eslint"

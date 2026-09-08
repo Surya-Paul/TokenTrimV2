@@ -1,0 +1,61 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build outputs
+dist
+build
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.production
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
+coverage
+.nyc_output
+
+# Electron
+apps/desktop/dist/electron
+apps/desktop/release
+
+# Benchmarks
+packages/benchmarks/results
+
+# Temporary files
+tmp
+temp
+*.tmp
+
+# Secrets (never commit)
+*.pem
+*.key
+*.cert
+*.crt
+id_rsa
+id_ed25519
+
+# Cache
+.cache
+.parcel-cache
+.esbuild
