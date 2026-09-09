@@ -209,6 +209,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
@@ -233,3 +235,4 @@ jobs:
           path: ./
           base: main
           head: HEAD
+          extra_args: --exclude-paths=apps/desktop/dist,packages/*/dist,packages/*/node_modules,apps/*/node_modules,node_modules
