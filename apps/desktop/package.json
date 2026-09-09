@@ -39,7 +39,7 @@
     "concurrently": "^8.2.2",
     "electron": "^30.5.1",
     "electron-builder": "^24.13.3",
-    "electron-rebuild": "^3.6.0",
+    "electron-rebuild": "^3.2.9",
     "eslint": "^8.57.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -52,8 +52,7 @@
     "productName": "TokenTrim",
     "copyright": "Copyright © 2024 TokenTrim",
     "directories": {
-      "output": "dist/electron",
-      "app": "."
+      "output": "dist/electron"
     },
     "files": [
       "dist/**/*",
