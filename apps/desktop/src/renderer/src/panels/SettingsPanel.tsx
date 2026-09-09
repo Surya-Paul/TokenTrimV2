@@ -10,6 +10,7 @@ import type { AppSettings } from '@tokentrim/shared';
 
 const TARGET_MODELS: SelectOption[] = [
   { value: 'gpt-4', label: 'GPT-4 / GPT-4 Turbo' },
+  { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
   { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
   { value: 'claude-3-opus', label: 'Claude 3 Opus' },
   { value: 'claude-3-sonnet', label: 'Claude 3 Sonnet' },
@@ -27,6 +28,18 @@ const COMPRESSION_TARGETS: SelectOption[] = [
   { value: 'conservative', label: 'Conservative (10-20%)' },
   { value: 'balanced', label: 'Balanced (20-35%)' },
   { value: 'aggressive', label: 'Aggressive (35-50%)' }
+];
+
+const THEME_OPTIONS: SelectOption[] = [
+  { value: 'system', label: 'System Default' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' }
+];
+
+const MODE_OPTIONS: SelectOption[] = [
+  { value: 'local', label: 'Local Only (Ollama)' },
+  { value: 'cloud', label: 'Cloud Only (Groq)' },
+  { value: 'auto', label: 'Auto (Local when offline, Cloud when online)' }
 ];
 
 interface SettingsPanelProps {
@@ -112,11 +125,53 @@ export function SettingsPanel({ settings, onSettingsChange }: SettingsPanelProps
               <span className="text-xs text-muted">Press keys to set (requires restart)</span>
             </div>
             <Select
+              label="Theme"
+              value={settings.general.theme}
+              onChange={e => handleNestedChange('general', 'theme', e.target.value as any)}
+              options={THEME_OPTIONS}
+              style={{ width: 280 }}
+            />
+            <Select
               label="Compression Target"
               value={settings.general.compressionTarget}
               onChange={e => handleNestedChange('general', 'compressionTarget', e.target.value as any)}
               options={COMPRESSION_TARGETS}
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Compression Mode */}
+      <Card>
+        <CardHeader title="Compression Mode" />
+        <CardContent>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <p className="text-sm text-muted">
+              Choose how TokenTrim processes your prompts. Auto mode uses local AI when offline and cloud when online.
+            </p>
+            <Select
+              label="Processing Mode"
+              value={settings.general.compressionMode || 'auto'}
+              onChange={e => handleNestedChange('general', 'compressionMode', e.target.value as any)}
+              options={MODE_OPTIONS}
+              style={{ width: 320 }}
+            />
+            <div style={{ 
+              padding: 12, 
+              background: 'var(--color-primary-light)', 
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--color-primary)',
+              fontSize: 13
+            }}>
+              <strong>Current mode:</strong> {(() => {
+                const mode = settings.general.compressionMode || 'auto';
+                switch (mode) {
+                  case 'local': return '🔒 Local Only - Uses Ollama (privacy-first, no internet needed)';
+                  case 'cloud': return '☁️ Cloud Only - Uses Groq (requires internet, API key)';
+                  default: return '🔄 Auto - Local when offline, Cloud when online (recommended)';
+                }
+              })()}
+            </div>
           </div>
         </CardContent>
       </Card>

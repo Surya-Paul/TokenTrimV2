@@ -358,6 +358,8 @@ export interface GeneralSettings {
   previewMode: boolean;
   autoStart: boolean;
   minimizeToTray: boolean;
+  theme: 'light' | 'dark' | 'system';
+  compressionMode: 'local' | 'cloud' | 'auto';
 }
 
 export interface AISettings {

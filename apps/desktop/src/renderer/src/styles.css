@@ -3,6 +3,7 @@
    ============================================================================ */
 
 :root {
+  /* Light theme (default) */
   --color-bg: #f8f9fa;
   --color-bg-elevated: #ffffff;
   --color-border: #e1e4e8;
@@ -27,6 +28,35 @@
   --radius-lg: 12px;
   --transition: 150ms ease;
   --font-mono: 'SF Mono', 'Fira Code', 'Monaco', monospace;
+  --toggle-track-off: #e1e4e8;
+  --toggle-track-on: #2f80ed;
+  --toggle-thumb: #ffffff;
+}
+
+/* Dark theme */
+[data-theme="dark"] {
+  --color-bg: #1a1a2e;
+  --color-bg-elevated: #22223a;
+  --color-border: #3a3a5a;
+  --color-border-focus: #4d8fff;
+  --color-text: #e8e8f0;
+  --color-text-secondary: #a0a0b8;
+  --color-text-muted: #6b6b8a;
+  --color-primary: #4d8fff;
+  --color-primary-hover: #6aa3ff;
+  --color-primary-light: #1e3a5f;
+  --color-success: #4ade80;
+  --color-success-light: #0a2d1a;
+  --color-warning: #fbbf24;
+  --color-warning-light: #2d2a0a;
+  --color-error: #f87171;
+  --color-error-light: #2d0a0a;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md: 0 4px 6px rgba(0,0,0,0.3);
+  --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
+  --toggle-track-off: #4a4a6a;
+  --toggle-track-on: #4d8fff;
+  --toggle-thumb: #ffffff;
 }
 
 * {
@@ -554,22 +584,23 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
-  background: var(--color-border);
+  background: var(--toggle-track-off);
   border-radius: 13px;
   transition: background var(--transition);
+  border: 2px solid transparent;
 }
 
 .toggle-input:checked + .toggle-track {
-  background: var(--color-primary);
+  background: var(--toggle-track-on);
 }
 
 .toggle-thumb {
   position: absolute;
-  top: 3px;
-  left: 3px;
+  top: 2px;
+  left: 2px;
   width: 20px;
   height: 20px;
-  background: white;
+  background: var(--toggle-thumb);
   border-radius: 50%;
   box-shadow: var(--shadow-sm);
   transition: transform var(--transition);
@@ -581,6 +612,7 @@ body {
 
 .toggle-input:focus-visible + .toggle-track {
   box-shadow: 0 0 0 3px var(--color-primary-light);
+  border-color: var(--color-primary);
 }
 
 .toggle-label {

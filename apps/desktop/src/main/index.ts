@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut, nativeImage, Tray, Menu, screen } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog, globalShortcut, nativeImage, Tray, Menu, screen, net } from 'electron';
 import { join, resolve } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import Store from 'electron-store';
@@ -21,7 +21,9 @@ const DEFAULT_SETTINGS: AppSettings = {
     compressionTarget: 'balanced',
     previewMode: true,
     autoStart: false,
-    minimizeToTray: true
+    minimizeToTray: true,
+    theme: 'system',
+    compressionMode: 'auto'
   },
   ai: {
     localEnabled: true,
@@ -70,6 +72,8 @@ let currentSettings: AppSettings = DEFAULT_SETTINGS;
 let isQuitting = false;
 let popupWindow: BrowserWindow | null = null;
 let popupText: string = '';
+let isOnline = true;
+let networkCheckInterval: NodeJS.Timeout | null = null;
 
 function createSettingsStore(): Store<StoredSettings> {
   return new Store<StoredSettings>({
@@ -96,14 +100,95 @@ function saveSettings(settings: Partial<AppSettings>): void {
   settingsStore.set(currentSettings as StoredSettings);
 }
 
+async function checkNetworkConnectivity(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const request = net.request({
+      method: 'HEAD',
+      protocol: 'https:',
+      hostname: 'www.google.com',
+      port: 443,
+      path: '/'
+    });
+    
+    const timeout = setTimeout(() => {
+      request.abort();
+      resolve(false);
+    }, 5000);
+    
+    request.on('response', () => {
+      clearTimeout(timeout);
+      resolve(true);
+    });
+    
+    request.on('error', () => {
+      clearTimeout(timeout);
+      resolve(false);
+    });
+    
+    request.end();
+  });
+}
+
+async function updateEngineForNetwork(): Promise<void> {
+  const mode = currentSettings.general.compressionMode || 'auto';
+  
+  // Only auto-switch in 'auto' mode
+  if (mode !== 'auto') {
+    return;
+  }
+  
+  const wasOnline = isOnline;
+  isOnline = await checkNetworkConnectivity();
+  
+  // Auto-switch logic: if we have cloud fallback enabled and network status changed
+  if (currentSettings.cloud.fallbackEnabled && currentSettings.general.enabled) {
+    const shouldUseCloud = isOnline && currentSettings.cloud.apiKey && currentSettings.cloud.apiKey.length > 0;
+    
+    // If network came back and we have cloud configured, or network went away
+    if ((wasOnline !== isOnline) || 
+        (isOnline && shouldUseCloud && !currentSettings.cloud.fallbackEnabled) ||
+        (!isOnline && currentSettings.cloud.fallbackEnabled)) {
+      console.log(`Network status changed: online=${isOnline}, reinitializing engine`);
+      await initializeEngine();
+    }
+  }
+}
+
+function startNetworkMonitoring(): void {
+  if (networkCheckInterval) {
+    clearInterval(networkCheckInterval);
+  }
+  
+  // Initial check
+  updateEngineForNetwork();
+  
+  // Check every 30 seconds
+  networkCheckInterval = setInterval(() => {
+    updateEngineForNetwork();
+  }, 30000);
+}
+
+function stopNetworkMonitoring(): void {
+  if (networkCheckInterval) {
+    clearInterval(networkCheckInterval);
+    networkCheckInterval = null;
+  }
+}
+
 async function initializeEngine(): Promise<void> {
-  const ollamaConfig = currentSettings.ai.localEnabled ? {
+  const mode = currentSettings.general.compressionMode || 'auto';
+  
+  // Determine which providers to enable based on mode
+  const useLocal = mode === 'local' || mode === 'auto';
+  const useCloud = mode === 'cloud' || mode === 'auto';
+  
+  const ollamaConfig = useLocal && currentSettings.ai.localEnabled ? {
     baseUrl: currentSettings.ai.endpoint,
     model: currentSettings.ai.model,
     timeoutMs: currentSettings.ai.timeoutMs
   } : undefined;
 
-  const groqConfig = currentSettings.cloud.fallbackEnabled && currentSettings.cloud.apiKey ? {
+  const groqConfig = useCloud && currentSettings.cloud.fallbackEnabled && currentSettings.cloud.apiKey ? {
     apiKey: currentSettings.cloud.apiKey,
     model: currentSettings.cloud.model,
     baseUrl: (currentSettings.cloud as any).baseUrl || 'https://api.groq.com/openai/v1',

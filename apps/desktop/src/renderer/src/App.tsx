@@ -29,6 +29,23 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [windowMaximized, setWindowMaximized] = useState(false);
 
+  // Apply theme on mount and when settings change
+  useEffect(() => {
+    if (settings) {
+      applyTheme(settings.general.theme);
+    }
+  }, [settings?.general.theme]);
+
+  const applyTheme = (theme: 'light' | 'dark' | 'system') => {
+    const root = document.documentElement;
+    if (theme === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+    } else {
+      root.setAttribute('data-theme', theme);
+    }
+  };
+
   // Load settings on mount
   useEffect(() => {
     loadSettings();
