@@ -81,7 +81,7 @@ const CONTENT_TYPE_PATTERNS: Array<{ type: ContentType; patterns: RegExp[]; weig
     type: 'terminal_commands',
     patterns: [
       /^\$\s+.+$/m,
-      /^\>\s+.+$/m,
+      /^>\s+.+$/m,
       /\b(?:ls|cd|git|npm|yarn|pnpm|docker|kubectl|aws|gcloud)\b/g
     ],
     weight: 6
@@ -91,7 +91,7 @@ const CONTENT_TYPE_PATTERNS: Array<{ type: ContentType; patterns: RegExp[]; weig
     patterns: [
       /^diff --git/m,
       /^@@\s+-\d+,\d+\s+\+\d+,\d+\s+@@/m,
-      /^[\+\-].+$/m
+      /^[+-].+$/m
     ],
     weight: 9
   },
@@ -126,7 +126,7 @@ const CONTENT_TYPE_PATTERNS: Array<{ type: ContentType; patterns: RegExp[]; weig
 const SEMANTIC_PATTERNS: Array<{ type: SemanticComponent['type']; pattern: RegExp; extractor?: (match: RegExpMatchArray) => string }> = [
   {
     type: 'objective',
-    pattern: /\b(?:goal|objective|aim|purpose|task|mission)\s*[:\-]\s*(.+)/gi
+    pattern: /\b(?:goal|objective|aim|purpose|task|mission)\s*[:-]\s*(.+)/gi
   },
   {
     type: 'instruction',
@@ -154,7 +154,7 @@ const SEMANTIC_PATTERNS: Array<{ type: SemanticComponent['type']; pattern: RegEx
   },
   {
     type: 'example',
-    pattern: /\b(?:example|for instance|such as|e\.g\.|i\.e\.)\s*[:\-]?\s*(.+)/gi
+    pattern: /\b(?:example|for instance|such as|e\.g\.|i\.e\.)\s*[:-]?\s*(.+)/gi
   },
   {
     type: 'technical_identifier',
@@ -178,7 +178,7 @@ const SEMANTIC_PATTERNS: Array<{ type: SemanticComponent['type']; pattern: RegEx
   },
   {
     type: 'file_path',
-    pattern: /(?:^|\s)(?:~\/|\.\/|\/|\w:\\)[\w\/\\.-]+/g
+    pattern: /(?:^|\s)(?:~\/|\.\/|\/|\w:\\)[\w/\\.-]+/g
   },
   {
     type: 'url',
@@ -198,7 +198,7 @@ const PROTECTED_PATTERNS: Array<{ type: ProtectedSegment['type']; pattern: RegEx
   { type: 'code_block', pattern: /```[\s\S]*?```/g, reason: 'Code block must remain intact' },
   { type: 'inline_code', pattern: /`[^`\n]+`/g, reason: 'Inline code must remain intact' },
   { type: 'url', pattern: /https?:\/\/[^\s]+/g, reason: 'URLs must not be modified' },
-  { type: 'file_path', pattern: /(?:^|\s)(?:~\/|\.\/|\/|\w:\\)[\w\/\\.-]+/g, reason: 'File paths must remain intact' },
+  { type: 'file_path', pattern: /(?:^|\s)(?:~\/|\.\/|\/|\w:\\)[\w/\\.-]+/g, reason: 'File paths must remain intact' },
   { type: 'api_endpoint', pattern: /\/(?:api|v\d+)\/[^\s]+/g, reason: 'API endpoints must remain intact' },
   { type: 'api_key', pattern: /\b(?:sk|pk|rk)_[a-zA-Z0-9]{24,}\b/g, reason: 'API keys must not be exposed' },
   { type: 'token', pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, reason: 'Tokens must not be exposed' },
@@ -211,7 +211,7 @@ const PROTECTED_PATTERNS: Array<{ type: ProtectedSegment['type']; pattern: RegEx
   { type: 'variable_name', pattern: /\b(?:const|let|var)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*=/g, reason: 'Variable declarations must remain intact' },
   { type: 'json_key', pattern: /"[^"]+"\s*:/g, reason: 'JSON keys must remain intact' },
   { type: 'sql_identifier', pattern: /\b(?:SELECT|FROM|WHERE|JOIN|INSERT|UPDATE|DELETE|CREATE|TABLE|INDEX|COLUMN)\b/gi, reason: 'SQL identifiers must remain intact' },
-  { type: 'regex', pattern: /\/(?:[^\/\\]|\\.)+\/[gimsuy]*/g, reason: 'Regex patterns must remain intact' },
+  { type: 'regex', pattern: /\/(?:[^/\\]|\\.)+\/[gimsuy]*/g, reason: 'Regex patterns must remain intact' },
   { type: 'latex', pattern: /\$[\s\S]*?\$/g, reason: 'LaTeX must remain intact' },
   { type: 'command', pattern: /^\$\s+.+$/gm, reason: 'Commands must remain intact' },
   { type: 'quoted_string', pattern: /"[^"]*"|'[^']*'/g, reason: 'Quoted strings must remain intact' },
@@ -324,7 +324,7 @@ export class InputAnalyzer {
     return components.sort((a, b) => a.startIndex - b.startIndex);
   }
 
-  private calculateConfidence(type: SemanticComponent['type'], content: string): number {
+  private calculateConfidence(type: SemanticComponent['type'], _content: string): number {
     const baseConfidence: Record<SemanticComponent['type'], number> = {
       objective: 0.8,
       instruction: 0.9,
@@ -394,7 +394,7 @@ export class InputAnalyzer {
     const hasCode = text.includes('```') || text.includes('`');
 
     if (tokenEstimate > 2000 || componentCount > 20 || (hasConstraints && hasCode)) return 'high';
-    if (tokenEstimate > 500 || componentCount > 10 || hasCode) return 'medium';
+    if (tokenEstimate > 500 || componentCount > 10 || hasCode || hasConstraints) return 'medium';
     return 'low';
   }
 
@@ -425,7 +425,7 @@ export class InputAnalyzer {
       if (indent > 0) indentLevels.add(indent);
     }
 
-    if (indentLevels.size > 3) return 'nested';
+    if (indentLevels.size > 1) return 'nested';
     if (text.includes('```') || text.startsWith('{') || text.startsWith('[')) return 'structured';
     return 'flat';
   }

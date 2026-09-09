@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { tokenizerRegistry } from '../index';
 import { TiktokenTokenizer } from '../tiktoken-tokenizer';
 import { GenericEstimator } from '../generic-estimator';
+import { ClaudeEstimator } from '../claude-estimator';
 
 describe('TokenizerRegistry', () => {
   it('has tokenizers registered', () => {
@@ -18,7 +19,7 @@ describe('TokenizerRegistry', () => {
 
   it('returns generic estimator for Claude models', () => {
     const tokenizer = tokenizerRegistry.getTokenizer('claude-3-opus');
-    expect(tokenizer).toBeInstanceOf(GenericEstimator);
+    expect(tokenizer).toBeInstanceOf(ClaudeEstimator);
   });
 
   it('returns generic estimator for unknown models', () => {

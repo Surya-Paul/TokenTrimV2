@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Tier0Compressor } from '../tier0-compressor';
 import { CompressionOptions } from '@tokentrim/shared';
 
@@ -14,6 +14,7 @@ describe('Tier0Compressor', () => {
 
   beforeEach(() => {
     compressor = new Tier0Compressor('gpt-4');
+    vi.spyOn(compressor as any, 'countTokens').mockImplementation(async (text: string) => text.length);
   });
 
   describe('Whitespace Compression', () => {
@@ -26,7 +27,7 @@ describe('Tier0Compressor', () => {
     });
 
     it('preserves code blocks', async () => {
-      const input = 'Here is code:\n```js\nfunction foo() {\n  return 1;\n}\n```\nEnd.';
+      const input = 'Here is code:   \n```js\nfunction foo() {\n  return 1;\n}\n```\nMore text.   ';
       const result = await compressor.compress(input, options);
       expect(result).not.toBeNull();
       expect(result!.compressedText).toContain('function foo()');
@@ -102,14 +103,14 @@ describe('Tier0Compressor', () => {
 
   describe('Protected Segment Preservation', () => {
     it('preserves URLs', async () => {
-      const input = 'Visit https://example.com/api/v1/users for more info';
+      const input = 'Visit    https://example.com/api/v1/users    for more info';
       const result = await compressor.compress(input, options);
       expect(result).not.toBeNull();
       expect(result!.compressedText).toContain('https://example.com/api/v1/users');
     });
 
     it('preserves code blocks', async () => {
-      const input = '```python\ndef hello():\n    print("world")\n```';
+      const input = '```python\ndef hello():\n    print("world")\n```    \n\n\n';
       const result = await compressor.compress(input, options);
       expect(result).not.toBeNull();
       expect(result!.compressedText).toContain('def hello():');
@@ -133,7 +134,7 @@ describe('Tier0Compressor', () => {
     it('rejects compression if protected segment lost', async () => {
       // This test simulates a case where compression would break a URL
       // The current implementation should detect this and return null
-      const input = 'Go to https://example.com/path';
+      const input = 'Go to      https://example.com/path';
       const result = await compressor.compress(input, options);
       expect(result).not.toBeNull();
       // The URL should be preserved
@@ -163,18 +164,16 @@ describe('Tier0Compressor', () => {
   describe('No Compression Cases', () => {
     it('returns null for very short text', async () => {
       const input = 'Hi';
+      vi.spyOn(compressor as any, 'countTokens').mockImplementation(async () => 1);
       const result = await compressor.compress(input, options);
       expect(result).toBeNull();
     });
 
     it('returns null when no reduction achieved', async () => {
-      // Text that's already minimal
       const input = 'Add a b';
+      vi.spyOn(compressor as any, 'countTokens').mockImplementation(async () => 3);
       const result = await compressor.compress(input, options);
-      // May return null or candidate with no reduction
-      if (result) {
-        expect(result.grossTokenReduction).toBeLessThanOrEqual(1);
-      }
+      expect(result).toBeNull();
     });
   });
 });

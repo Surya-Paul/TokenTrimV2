@@ -1,7 +1,6 @@
 # Dependency Review Configuration
 
-# Fail on vulnerabilities with these severities
-fail-on-severity: high, critical
+fail-on-severity: high
 
 # Allow these licenses
 allow-licenses:

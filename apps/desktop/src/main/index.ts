@@ -68,6 +68,8 @@ let engine: TokenTrimEngine;
 let settingsStore: Store<StoredSettings>;
 let currentSettings: AppSettings = DEFAULT_SETTINGS;
 let isQuitting = false;
+let popupWindow: BrowserWindow | null = null;
+let popupText: string = '';
 
 function createSettingsStore(): Store<StoredSettings> {
   return new Store<StoredSettings>({
@@ -225,10 +227,94 @@ function createTray(): void {
   });
 }
 
+function createPopupWindow(): void {
+  if (popupWindow) {
+    popupWindow.close();
+    popupWindow = null;
+  }
+
+  const cursorPoint = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursorPoint);
+  const { workArea } = display;
+
+  const popupWidth = 480;
+  const popupHeight = 440;
+
+  let x = cursorPoint.x - popupWidth / 2;
+  let y = cursorPoint.y - popupHeight - 20;
+
+  // Clamp to screen bounds
+  if (x < workArea.x) x = workArea.x + 10;
+  if (x + popupWidth > workArea.x + workArea.width) x = workArea.x + workArea.width - popupWidth - 10;
+  if (y < workArea.y) y = workArea.y + 10;
+  if (y + popupHeight > workArea.y + workArea.height) y = workArea.y + workArea.height - popupHeight - 10;
+
+  popupWindow = new BrowserWindow({
+    width: popupWidth,
+    height: popupHeight,
+    x,
+    y,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false
+    }
+  });
+
+  // Security: Prevent navigation
+  popupWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  // Close on blur (click outside)
+  popupWindow.on('blur', () => {
+    // Small delay to allow button clicks to register
+    setTimeout(() => {
+      if (popupWindow && !popupWindow.isFocused()) {
+        popupWindow.close();
+      }
+    }, 100);
+  });
+
+  popupWindow.on('close', () => {
+    popupWindow = null;
+    popupText = '';
+  });
+
+  // Load the popup
+  if (process.env['NODE_ENV'] === 'development') {
+    popupWindow.loadURL('http://localhost:3000/popup.html');
+    popupWindow.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    popupWindow.loadFile(join(__dirname, '../renderer/popup.html'));
+  }
+
+  popupWindow.once('ready-to-show', () => {
+    popupWindow?.show();
+    popupWindow?.focus();
+  });
+}
+
 function registerGlobalShortcut(): void {
   globalShortcut.unregisterAll();
   
-  const ret = globalShortcut.register(currentSettings.general.globalHotkey, async () => {
+  // Main window toggle shortcut (Cmd/Ctrl+Shift+T)
+  const mainRet = globalShortcut.register(currentSettings.general.globalHotkey, async () => {
     if (mainWindow?.isVisible()) {
       mainWindow.hide();
     } else {
@@ -237,12 +323,30 @@ function registerGlobalShortcut(): void {
     }
   });
 
-  if (!ret) {
-    console.warn('Failed to register global shortcut');
+  // Quick compress popup shortcut (Cmd/Ctrl+Shift+C)
+  const popupRet = globalShortcut.register('CommandOrControl+Shift+C', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { clipboard } = require('electron');
+    const text = clipboard.readText();
+    
+    if (!text || text.trim().length === 0) {
+      return;
+    }
+    
+    popupText = text;
+    createPopupWindow();
+  });
+
+  if (!mainRet) {
+    console.warn('Failed to register main global shortcut');
+  }
+  if (!popupRet) {
+    console.warn('Failed to register popup global shortcut');
   }
 }
 
 async function compressClipboard(): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { clipboard } = require('electron');
   const text = clipboard.readText();
   
@@ -320,6 +424,7 @@ function setupIpcHandlers(): void {
         await keytar.deletePassword(SERVICE_NAME, 'groq-api-key');
       }
       // Don't store API key in settings
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { cloud: { apiKey: _, ...cloudRest }, ...rest } = settings;
       saveSettings({ ...rest, cloud: { ...cloudRest, apiKey: '' } });
     } else {
@@ -343,7 +448,7 @@ function setupIpcHandlers(): void {
   ipcMain.handle('analytics:get', () => engine.getTelemetry().getAnalytics());
 
   // Benchmark
-  ipcMain.handle('benchmark:run', async (_event, options: BenchmarkRunOptions) => {
+  ipcMain.handle('benchmark:run', async (_event, _options: BenchmarkRunOptions) => {
     // Implementation would go here
     return { timestamp: Date.now(), totalCases: 0, passedCases: 0, failedCases: 0, results: [] };
   });
@@ -368,6 +473,52 @@ function setupIpcHandlers(): void {
   ipcMain.handle('privacy:scan', async (_event, text: string): Promise<SecretDetectionResult> => {
     // Use the engine's privacy detector
     return engine['privacyDetector'].scan(text);
+  });
+
+  // Popup handlers
+  ipcMain.handle('popup:get-text', () => popupText);
+
+  ipcMain.handle('popup:compress', async (_event, text: string) => {
+    try {
+      const options = {
+        targetModel: currentSettings.targetModel.tokenizer,
+        maxCompressionRatio: currentSettings.general.compressionTarget === 'aggressive' ? 0.5 : 
+                            currentSettings.general.compressionTarget === 'conservative' ? 0.2 : 0.35,
+        preserveFormatting: true,
+        allowCloudFallback: currentSettings.cloud.fallbackEnabled,
+        requireConfirmationForCloud: currentSettings.privacy.requireCloudConfirmation,
+        verificationThresholds: currentSettings.advanced.verificationThresholds
+      };
+      return await engine.compress(text, options);
+    } catch (error) {
+      return {
+        originalText: text,
+        bestCandidate: null,
+        allCandidates: [],
+        accepted: false,
+        rejectionReason: error instanceof Error ? error.message : 'Unknown error',
+        processingTimeMs: 0,
+        originalTokens: 0,
+        finalTokens: 0,
+        grossReduction: 0,
+        compressionOverhead: 0,
+        netSavings: 0,
+        estimatedCostSavings: 0,
+        provider: 'deterministic',
+        mode: 'local' as const
+      };
+    }
+  });
+
+  ipcMain.handle('popup:apply', (_event, compressedText: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { clipboard } = require('electron');
+    clipboard.writeText(compressedText);
+    popupWindow?.close();
+  });
+
+  ipcMain.handle('popup:cancel', () => {
+    popupWindow?.close();
   });
 
   // App info

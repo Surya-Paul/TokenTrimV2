@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
-import type { CompressionRequest, CompressionResponse, AppSettings, BenchmarkRunOptions, ProviderType, SecretDetectionResult, AnalyticsData } from '@tokentrim/shared';
+import type { CompressionRequest, CompressionResponse, AppSettings, BenchmarkRunOptions, ProviderType, SecretDetectionResult, AnalyticsData, CompressionResult } from '@tokentrim/shared';
 
 // Secure IPC channel allowlist
 const ALLOWED_CHANNELS = {
@@ -29,7 +29,11 @@ const ALLOWED_CHANNELS = {
     'window:minimize',
     'window:maximize',
     'window:close',
-    'window:isMaximized'
+    'window:isMaximized',
+    'popup:get-text',
+    'popup:compress',
+    'popup:apply',
+    'popup:cancel'
   ],
   // Renderer -> Main (send)
   send: [
@@ -114,6 +118,14 @@ contextBridge.exposeInMainWorld('tokentrim', {
     isMaximized: createSafeInvoke('window:isMaximized')
   },
   
+  // Popup
+  popup: {
+    getText: createSafeInvoke('popup:get-text'),
+    compress: createSafeInvoke('popup:compress'),
+    apply: createSafeInvoke('popup:apply'),
+    cancel: createSafeInvoke('popup:cancel')
+  },
+  
   // Events
   onCompressionComplete: createSafeOn('compression:complete'),
   onNavigate: createSafeOn('navigate'),
@@ -153,6 +165,12 @@ declare global {
         maximize: () => Promise<void>;
         close: () => Promise<void>;
         isMaximized: () => Promise<boolean>;
+      };
+      popup: {
+        getText: () => Promise<string>;
+        compress: (text: string) => Promise<CompressionResult>;
+        apply: (compressedText: string) => Promise<void>;
+        cancel: () => Promise<void>;
       };
       onCompressionComplete: (listener: (event: any, data: any) => void) => () => void;
       onNavigate: (listener: (event: any, page: string) => void) => () => void;

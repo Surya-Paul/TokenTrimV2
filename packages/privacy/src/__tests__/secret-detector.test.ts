@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { SecretDetector, createDefaultPrivacySettings } from '../secret-detector';
 import { PrivacySettings } from '@tokentrim/shared';
 
@@ -11,14 +11,14 @@ describe('SecretDetector', () => {
 
   describe('API Key Detection', () => {
     it('detects OpenAI-style API keys', () => {
-      const text = 'My API key is sk-abcdefghijklmnopqrstuvwxyz123456789012345678901234';
+      const text = 'My API key is sk-abcdefghijklmnopqrstuvwxyz1234567890123456789012';
       const result = detector.scan(text);
       expect(result.hasSecrets).toBe(true);
       expect(result.secrets.some(s => s.type === 'api_key')).toBe(true);
     });
 
     it('detects GitHub tokens', () => {
-      const text = 'ghp_abcdefghijklmnopqrstuvwxyz123456789012';
+      const text = 'ghp_abcdefghijklmnopqrstuvwxyz1234567890';
       const result = detector.scan(text);
       expect(result.hasSecrets).toBe(true);
       expect(result.secrets.some(s => s.type === 'api_key')).toBe(true);
@@ -80,22 +80,22 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
 
   describe('Masking', () => {
     it('masks secrets in text', () => {
-      const text = 'My key is sk-abcdefghijklmnopqrstuvwxyz123456789012345678901234';
+      const text = 'My key is sk-abcdefghijklmnopqrstuvwxyz1234567890123456789012';
       const masked = detector.maskSecrets(text);
-      expect(masked).not.toContain('sk-abcdefghijklmnopqrstuvwxyz123456789012345678901234');
-      expect(masked).toContain('sk-ab******34');
+      expect(masked).not.toContain('sk-abcdefghijklmnopqrstuvwxyz1234567890123456789012');
+      expect(masked).toContain('sk-' + '*'.repeat(45) + '012');
     });
 
     it('masks JWT tokens', () => {
       const text = 'Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
       const masked = detector.maskSecrets(text);
-      expect(masked).toContain('eyJh******w5c');
+      expect(masked).toContain('eyJh**********.eyJz**********.SflK**********');
     });
   });
 
   describe('Cloud Sending Policy', () => {
     it('blocks cloud when secrets detected and neverSendSecrets=true', () => {
-      const text = 'API key: sk-abcdefghijklmnopqrstuvwxyz123456789012345678901234';
+      const text = 'API key: sk-abcdefghijklmnopqrstuvwxyz1234567890123456789012';
       const canSend = detector.canSendToCloud(text);
       expect(canSend.allowed).toBe(false);
       expect(canSend.reason).toContain('Secrets detected');

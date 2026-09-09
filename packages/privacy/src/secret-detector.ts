@@ -30,7 +30,7 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'api_key',
-    regex: /\bapi[_-]?key["\s:=]+["\']?([a-zA-Z0-9_-]{20,})["\']?/gi,
+    regex: /\bapi[_-]?key["\s:=]+["']?([a-zA-Z0-9_-]{20,})["']?/gi,
     confidence: 0.85,
     maskFn: (m) => m.slice(0, 4) + '*'.repeat(Math.max(0, m.length - 8)) + m.slice(-4)
   },
@@ -42,7 +42,7 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'aws_credentials',
-    regex: /\b(?:aws_secret_access_key|aws_access_key_id)["\s:=]+["\']?([a-zA-Z0-9/+=]{40})["\']?/gi,
+    regex: /\b(?:aws_secret_access_key|aws_access_key_id)["\s:=]+["']?([a-zA-Z0-9/+=]{40})["']?/gi,
     confidence: 0.9,
     maskFn: (m) => m.slice(0, 4) + '*'.repeat(Math.max(0, m.length - 8)) + m.slice(-4)
   },
@@ -63,7 +63,7 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'oauth_token',
-    regex: /\baccess_token["\s:=]+["\']?([a-zA-Z0-9_-]{20,})["\']?/gi,
+    regex: /\baccess_token["\s:=]+["']?([a-zA-Z0-9_-]{20,})["']?/gi,
     confidence: 0.8,
     maskFn: (m) => m.slice(0, 4) + '*'.repeat(Math.max(0, m.length - 8)) + m.slice(-4)
   },
@@ -81,27 +81,27 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'database_credentials',
-    regex: /\b(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^\/]+\/\w+/gi,
+    regex: /\b(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^/]+\/\w+/gi,
     confidence: 0.9,
     maskFn: (m) => m.replace(/:([^:@]+)@/, ':****@')
   },
   {
     type: 'database_credentials',
-    regex: /\b(?:password|passwd|pwd)["\s:=]+["\']?([^"\'\s]{8,})["\']?/gi,
+    regex: /\b(?:password|passwd|pwd)["\s:=]+["']?([^"'\s]{8,})["']?/gi,
     confidence: 0.7,
-    maskFn: (m) => m.replace(/["\']?[^"\'\s]{8,}["\']?/, '"******"')
+    maskFn: (m) => m.replace(/["']?[^"'\s]{8,}["']?/, '"******"')
   },
   {
     type: 'environment_variable',
-    regex: /\b(?:SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL)_[A-Z0-9_]+=["\']?([^"\'\s]{10,})["\']?/gi,
+    regex: /\b(?:SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL)_[A-Z0-9_]+=["']?([^"'\s]{10,})["']?/gi,
     confidence: 0.8,
-    maskFn: (m) => m.replace(/=["\']?[^"\'\s]{10,}["\']?/, '="******"')
+    maskFn: (m) => m.replace(/=["']?[^"'\s]{10,}["']?/, '="******"')
   },
   {
     type: 'generic_secret',
-    regex: /\b(?:secret|token|key|password)["\s:=]+["\']?([a-zA-Z0-9+/=_-]{20,})["\']?/gi,
+    regex: /\b(?:secret|token|key|password)["\s:=]+["']?([a-zA-Z0-9+/=_-]{20,})["']?/gi,
     confidence: 0.6,
-    maskFn: (m) => m.replace(/["\']?[a-zA-Z0-9+/=_-]{20,}["\']?/, '"******"')
+    maskFn: (m) => m.replace(/["']?[a-zA-Z0-9+/=_-]{20,}["']?/, '"******"')
   }
 ];
 

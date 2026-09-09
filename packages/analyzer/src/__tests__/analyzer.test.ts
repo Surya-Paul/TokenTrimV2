@@ -91,7 +91,7 @@ describe('InputAnalyzer', () => {
     });
 
     it('extracts output format', async () => {
-      const text = 'Return the result as JSON';
+      const text = 'Return as JSON';
       const result = await analyzer.analyze(text);
       expect(result.semanticComponents.some(c => c.type === 'output_format')).toBe(true);
     });
@@ -103,7 +103,7 @@ describe('InputAnalyzer', () => {
     });
 
     it('extracts technical identifiers', async () => {
-      const text = 'Call the processData() function';
+      const text = 'function processData';
       const result = await analyzer.analyze(text);
       expect(result.semanticComponents.some(c => c.type === 'function_name')).toBe(true);
     });

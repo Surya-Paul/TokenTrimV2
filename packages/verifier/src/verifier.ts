@@ -9,12 +9,9 @@ import {
   InstructionCheck,
   ConstraintCheck,
   TechnicalIntegrityCheck,
-  IntegrityItem,
-  ProtectedSegment,
-  SemanticComponent
+  IntegrityItem
 } from '@tokentrim/shared';
 import { InputAnalyzer } from '@tokentrim/analyzer';
-import { tokenizerRegistry } from '@tokentrim/tokenizer';
 
 export const DEFAULT_THRESHOLDS: VerificationThresholds = {
   semanticConfidence: 0.85,
@@ -35,10 +32,10 @@ const CONSTRAINT_PATTERNS = [
   { type: 'count' as const, pattern: /\b(exactly|precisely|at least|at most|no more than|no less than|minimum|maximum)\s+\d+/gi },
   { type: 'format' as const, pattern: /\b(?:format|output|return|respond)\s+(?:as|in|using)\s+(?:json|xml|yaml|markdown|csv|table|list|bullet points?|numbered)\b/gi },
   { type: 'technology' as const, pattern: /\b(?:use|using|with|in)\s+(?:python|javascript|typescript|java|c\+\+|go|rust|swift|kotlin|react|vue|angular|node|django|flask|spring)\b/gi },
-  { type: 'language' as const, pattern: /\b(?:language|lang)\s*[:\-]\s*(\w+)/gi },
-  { type: 'framework' as const, pattern: /\b(?:framework|library)\s*[:\-]\s*(\w+)/gi },
+  { type: 'language' as const, pattern: /\b(?:language|lang)\s*[:-]\s*(\w+)/gi },
+  { type: 'framework' as const, pattern: /\b(?:framework|library)\s*[:-]\s*(\w+)/gi },
   { type: 'filename' as const, pattern: /\b(?:file|filename|save as|write to)\s+['"]?([\w\-.]+\.\w+)['"]?/gi },
-  { type: 'version' as const, pattern: /\b(?:version|v)\s*[:\-]\s*(\d+\.\d+\.\d+)/gi },
+  { type: 'version' as const, pattern: /\b(?:version|v)\s*[:-]\s*(\d+\.\d+\.\d+)/gi },
   { type: 'limit' as const, pattern: /\b(?:limit|max|maximum|up to)\s+(\d+)/gi },
   { type: 'deadline' as const, pattern: /\b(?:by|before|deadline|due)\s+(\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2})/gi },
   { type: 'requirement' as const, pattern: /\b(?:require|need|must have|has to)\s+(.+?)(?:\.|$)/gi }
@@ -65,7 +62,7 @@ export class VerificationEngine {
     const failedChecks: SafetyCheckType[] = [];
 
     // 1. Instruction Preservation
-    const instructionCheck = this.checkInstructions(original, compressed, originalAnalysis);
+    const instructionCheck = this.checkInstructions(original, compressed, originalAnalysis, compressedAnalysis);
     details.push({
       check: 'instruction_preservation',
       passed: instructionCheck.preserved,
@@ -156,9 +153,9 @@ export class VerificationEngine {
     };
   }
 
-  private checkInstructions(original: string, compressed: string, analysis: AnalysisResult): InstructionCheck {
-    const originalInstructions = this.extractInstructions(original, analysis);
-    const compressedInstructions = this.extractInstructions(compressed, analysis);
+  private checkInstructions(original: string, compressed: string, originalAnalysis: AnalysisResult, compressedAnalysis: AnalysisResult): InstructionCheck {
+    const originalInstructions = this.extractInstructions(original, originalAnalysis);
+    const compressedInstructions = this.extractInstructions(compressed, compressedAnalysis);
     
     const lostInstructions = originalInstructions.filter(
       inst => !this.isInstructionPreserved(inst, compressedInstructions)
@@ -204,13 +201,15 @@ export class VerificationEngine {
 
   private isInstructionPreserved(instruction: string, compressedInstructions: string[]): boolean {
     const normalized = instruction.toLowerCase().replace(/[^\w\s]/g, '').trim();
-    const keyTerms = normalized.split(/\s+/).filter(t => t.length > 3 && !['must', 'should', 'required', 'exactly', 'only', 'never', 'without', 'unless', 'before', 'after'].includes(t));
+    const keywords = ['must', 'should', 'required', 'exactly', 'only', 'never', 'without', 'unless', 'before', 'after', 'not', 'dont', 'do'];
+    const keyTerms = normalized.split(/\s+/).filter(t => t.length > 3 || keywords.includes(t));
     
     if (keyTerms.length === 0) return true;
     
     for (const compInst of compressedInstructions) {
       const compNormalized = compInst.toLowerCase().replace(/[^\w\s]/g, '').trim();
-      const matches = keyTerms.filter(term => compNormalized.includes(term)).length;
+      const compTerms = new Set(compNormalized.split(/\s+/));
+      const matches = keyTerms.filter(term => compTerms.has(term)).length;
       if (matches / keyTerms.length >= 0.7) return true;
     }
     
@@ -218,21 +217,25 @@ export class VerificationEngine {
   }
 
   private findMatchingInstruction(instruction: string, compressedInstructions: string[]): string | null {
+    if (compressedInstructions.includes(instruction)) return instruction;
+
     const normalized = instruction.toLowerCase().replace(/[^\w\s]/g, '').trim();
-    const keyTerms = normalized.split(/\s+/).filter(t => t.length > 3);
+    const keywords = ['must', 'should', 'required', 'exactly', 'only', 'never', 'without', 'unless', 'before', 'after', 'not', 'dont', 'do'];
+    const keyTerms = normalized.split(/\s+/).filter(t => t.length > 3 || keywords.includes(t));
     
     if (keyTerms.length === 0) return null;
     
     for (const compInst of compressedInstructions) {
       const compNormalized = compInst.toLowerCase().replace(/[^\w\s]/g, '').trim();
-      const matches = keyTerms.filter(term => compNormalized.includes(term)).length;
+      const compTerms = new Set(compNormalized.split(/\s+/));
+      const matches = keyTerms.filter(term => compTerms.has(term)).length;
       if (matches / keyTerms.length >= 0.7) return compInst;
     }
     
     return null;
   }
 
-  private checkConstraints(original: string, compressed: string, analysis: AnalysisResult): ConstraintCheck {
+  private checkConstraints(original: string, compressed: string, _analysis: AnalysisResult): ConstraintCheck {
     const originalConstraints = this.extractConstraints(original);
     const compressedConstraints = this.extractConstraints(compressed);
     
@@ -362,7 +365,6 @@ export class VerificationEngine {
           check.paths.push(item);
           break;
         case 'json_key':
-        case 'api_endpoint':
         case 'api_key':
         case 'token':
         case 'hash':
@@ -508,7 +510,7 @@ export class VerificationEngine {
     return intersection / union > 0.5;
   }
 
-  private checkPrivacyCompliance(original: string, compressed: string): number {
+  private checkPrivacyCompliance(_original: string, _compressed: string): number {
     // Check that no secrets were exposed in compression
     // In practice, this would use the SecretDetector
     // For now, assume compliance if compressed doesn't contain more secrets than original

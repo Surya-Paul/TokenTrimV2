@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, CardHeader, CardContent } from '../components/Card';
 import { Button } from '../components/Button';
+import { Badge } from '../components/Badge';
 
 export function AboutPanel() {
   return (

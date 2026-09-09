@@ -15,9 +15,9 @@ export function Tooltip({ content, children, position = 'top' }: TooltipProps) {
     <span 
       className="tooltip-wrapper" 
       data-tooltip={content}
-      style={{ '--tooltip-position': position }}
+      style={{ '--tooltip-position': position } as React.CSSProperties}
     >
-      {React.cloneElement(children, { 'aria-label': content })}
+      {React.cloneElement(children as React.ReactElement<any>, { 'aria-label': content })}
     </span>
   );
 }

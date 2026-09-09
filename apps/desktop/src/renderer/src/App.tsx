@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { TabView, TabPanel, TabList, Tab } from './components/Tabs';
+import { TabView, TabPanel } from './components/Tabs';
 import { Button } from './components/Button';
 import { Card } from './components/Card';
 import { Input } from './components/Input';
@@ -57,7 +57,7 @@ function App() {
     try {
       const maximized = await window.tokentrim.window.isMaximized();
       setWindowMaximized(maximized);
-    } catch {}
+    } catch { /* ignore error */ }
   };
 
   const handleSettingsChange = useCallback(async (newSettings: Partial<AppSettings>) => {
@@ -88,7 +88,7 @@ function App() {
           </div>
         </div>
         <div className="header-center">
-          <TabView activeTab={activeTab} onChange={setActiveTab} tabs={TABS} />
+          <TabView activeTab={activeTab} onChange={(t) => setActiveTab(t as TabId)} tabs={TABS} />
         </div>
         <div className="header-right">
           <div className="window-controls">

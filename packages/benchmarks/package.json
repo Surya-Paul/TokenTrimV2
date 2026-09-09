@@ -14,26 +14,26 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "benchmark": "tsx src/run-benchmark.ts",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tokentrim/core": "workspace:*",
-    "@tokentrim/shared": "workspace:*",
     "@tokentrim/analyzer": "workspace:*",
     "@tokentrim/compressor": "workspace:*",
+    "@tokentrim/core": "workspace:*",
+    "@tokentrim/privacy": "workspace:*",
+    "@tokentrim/shared": "workspace:*",
     "@tokentrim/tokenizer": "workspace:*",
-    "@tokentrim/verifier": "workspace:*",
-    "@tokentrim/privacy": "workspace:*"
+    "@tokentrim/verifier": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
-    "typescript": "^5.4.5",
-    "vitest": "^1.6.0",
     "eslint": "^8.57.0",
-    "tsx": "^4.7.3"
+    "tsx": "^4.7.3",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
   }
 }

@@ -1,0 +1,428 @@
+/* ============================================================================
+   TokenTrim - Quick Compress Popup Styles
+   ============================================================================ */
+
+:root {
+  /* Reuse main design tokens */
+  --color-bg: #f8f9fa;
+  --color-bg-elevated: #ffffff;
+  --color-border: #e1e4e8;
+  --color-border-focus: #2f80ed;
+  --color-text: #1a1a2e;
+  --color-text-secondary: #6b7280;
+  --color-text-muted: #9ca3af;
+  --color-primary: #2f80ed;
+  --color-primary-hover: #1a6fd4;
+  --color-primary-light: #e8f0fe;
+  --color-success: #27ae60;
+  --color-success-light: #e8f8f0;
+  --color-warning: #f2994a;
+  --color-warning-light: #fff8ed;
+  --color-error: #eb5757;
+  --color-error-light: #fef0f0;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+  --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+  --shadow-xl: 0 20px 60px rgba(0,0,0,0.15);
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --transition: 150ms ease;
+  --font-mono: 'SF Mono', 'Fira Code', 'Monaco', monospace;
+}
+
+/* Entrance animation */
+@keyframes popup-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* ============================================================================
+   Popup Container
+   ============================================================================ */
+
+.popup-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.popup-container:focus {
+  outline: none;
+}
+
+.popup-content {
+  width: 480px;
+  max-height: 440px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(225, 228, 232, 0.8);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: popup-enter 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+  position: relative;
+}
+
+/* Glassmorphism accent border */
+.popup-content::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent, 
+    rgba(255, 255, 255, 0.8), 
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* ============================================================================
+   Header
+   ============================================================================ */
+
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 16px;
+  background: rgba(255, 255, 255, 0.6);
+  border-bottom: 1px solid rgba(225, 228, 232, 0.5);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.popup-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+
+.popup-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--transition);
+  -webkit-app-region: no-drag;
+}
+
+.popup-close:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--color-text);
+}
+
+.popup-close:active {
+  transform: scale(0.95);
+}
+
+/* ============================================================================
+   Sections
+   ============================================================================ */
+
+.popup-section {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(225, 228, 232, 0.4);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.popup-section:last-of-type {
+  border-bottom: none;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+
+.section-tokens {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.section-tokens-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.savings-badge {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* ============================================================================
+   Text Preview Areas
+   ============================================================================ */
+
+.text-preview {
+  flex: 1;
+  min-height: 0;
+  background: rgba(248, 249, 250, 0.8);
+  border: 1px solid rgba(225, 228, 232, 0.6);
+  border-radius: var(--radius-md);
+  overflow: auto;
+  max-height: 100px;
+}
+
+.text-preview pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 100px;
+}
+
+/* Original text slightly muted */
+.original-text pre {
+  color: var(--color-text-secondary);
+}
+
+/* Compressed text with success tint */
+.compressed-text pre {
+  color: var(--color-text);
+}
+
+/* Rejection message */
+.rejection-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  color: var(--color-warning);
+  font-size: 12px;
+}
+
+.rejection-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+   Shimmer Loading Animation
+   ============================================================================ */
+
+.shimmer-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.shimmer-line {
+  height: 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    rgba(225, 228, 232, 0.4) 25%,
+    rgba(225, 228, 232, 0.6) 50%,
+    rgba(225, 228, 232, 0.4) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.shimmer-line.short {
+  width: 60%;
+}
+
+/* ============================================================================
+   Stats Bar
+   ============================================================================ */
+
+.popup-stats {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  background: rgba(248, 249, 250, 0.6);
+  border-top: 1px solid rgba(225, 228, 232, 0.4);
+}
+
+.stat-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+}
+
+.stat-label {
+  font-size: 9px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.stat-divider {
+  width: 1px;
+  height: 24px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(225, 228, 232, 0.6),
+    transparent
+  );
+}
+
+/* ============================================================================
+   Action Buttons
+   ============================================================================ */
+
+.popup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.6);
+  border-top: 1px solid rgba(225, 228, 232, 0.4);
+}
+
+/* Compact button variants for popup */
+.popup-actions .btn-sm {
+  padding: 8px 14px;
+  font-size: 12px;
+  border-radius: var(--radius-md);
+}
+
+/* Success button for apply */
+.btn-success {
+  background: var(--color-success);
+  color: white;
+}
+
+.btn-success:hover:not(:disabled) {
+  background: #1e8e4f;
+}
+
+.btn-success:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* ============================================================================
+   Badge Variants
+   ============================================================================ */
+
+.badge-sm {
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* ============================================================================
+   Error State
+   ============================================================================ */
+
+.error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  text-align: center;
+  gap: 16px;
+}
+
+.error-state .popup-header {
+  background: transparent;
+  border-bottom: none;
+  padding: 0;
+}
+
+.error-icon {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.popup-error p {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.popup-error .btn {
+  margin-top: 8px;
+}
+
+/* ============================================================================
+   Scrollbar Styling (Popup)
+   ============================================================================ */
+
+.text-preview::-webkit-scrollbar {
+  width: 5px;
+}
+
+.text-preview::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.text-preview::-webkit-scrollbar-thumb {
+  background: rgba(193, 193, 193, 0.5);
+  border-radius: 3px;
+}
+
+.text-preview::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 161, 0.7);
+}

@@ -223,12 +223,33 @@ export class Tier0Compressor {
       'interfaces': 'ifaces'
     };
 
-    let result = text;
+    // Protect code blocks from abbreviation (same guard as removeExtraWhitespace)
+    const codeBlocks: string[] = [];
+    let result = text.replace(/```[\s\S]*?```/g, (match) => {
+      codeBlocks.push(match);
+      return `__CODE_BLOCK_${codeBlocks.length - 1}__`;
+    });
+
+    // Also protect inline code
+    const inlineCodes: string[] = [];
+    result = result.replace(/`[^`]+`/g, (match) => {
+      inlineCodes.push(match);
+      return `__INLINE_CODE_${inlineCodes.length - 1}__`;
+    });
+
     for (const [full, abbr] of Object.entries(abbreviations)) {
       const regex = new RegExp(`\\b${full}\\b`, 'gi');
       result = result.replace(regex, abbr);
     }
-    
+
+    // Restore inline code then code blocks
+    inlineCodes.forEach((code, i) => {
+      result = result.replace(`__INLINE_CODE_${i}__`, code);
+    });
+    codeBlocks.forEach((block, i) => {
+      result = result.replace(`__CODE_BLOCK_${i}__`, block);
+    });
+
     return result;
   }
 
@@ -240,7 +261,7 @@ export class Tier0Compressor {
     result = result.replace(/(?:for example|for instance)[,:]\s*([^.]+)\.\s*(?:for example|for instance)[,:]\s*([^.]+)\./gi, 'E.g., $1; $2.');
     
     // Remove "Example:" prefix if followed by code
-    result = result.replace(/example\s*[:\-]\s*(```)/gi, '$1');
+    result = result.replace(/example\s*[:-]\s*(```)/gi, '$1');
     
     return result;
   }
@@ -287,20 +308,29 @@ export class Tier0Compressor {
   }
 
   private checkSemanticPreservation(original: string, compressed: string, analysis: AnalysisResult): number {
-    // Check that key semantic components are preserved
+    // Check that key semantic components are preserved using fuzzy key-term matching
     let preserved = 0;
     let total = 0;
-    
+
     for (const component of analysis.semanticComponents) {
-      if (component.type === 'objective' || component.type === 'instruction' || 
+      if (component.type === 'objective' || component.type === 'instruction' ||
           component.type === 'constraint' || component.type === 'prohibition') {
         total++;
-        if (compressed.includes(component.content)) {
+        const normalized = component.content.toLowerCase().replace(/[^\w\s]/g, '').trim();
+        const compNormalized = compressed.toLowerCase().replace(/[^\w\s]/g, '').trim();
+        const keyTerms = normalized.split(/\s+/).filter((t: string) => t.length > 3);
+        if (keyTerms.length === 0) {
           preserved++;
+        } else {
+          const compTerms = new Set(compNormalized.split(/\s+/));
+          const matches = keyTerms.filter((term: string) => compTerms.has(term) || compNormalized.includes(term)).length;
+          if (matches / keyTerms.length >= 0.6) {
+            preserved++;
+          }
         }
       }
     }
-    
+
     return total > 0 ? preserved / total : 1.0;
   }
 

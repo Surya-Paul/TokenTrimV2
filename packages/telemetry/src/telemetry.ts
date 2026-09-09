@@ -218,7 +218,7 @@ export class Telemetry {
       // Clear stored data when disabled
       try {
         getLocalStorage().removeItem(STORAGE_KEY);
-      } catch {}
+      } catch { /* storage unavailable */ }
     } else {
       this.data = this.loadAnalytics();
     }
@@ -266,6 +266,7 @@ export class ServerTelemetry {
     if (!this.enabled) return this.getDefaultAnalytics();
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require('fs');
       if (fs.existsSync(this.storagePath)) {
         const stored = JSON.parse(fs.readFileSync(this.storagePath, 'utf-8'));
@@ -273,7 +274,7 @@ export class ServerTelemetry {
           return this.migrateAnalytics(stored);
         }
       }
-    } catch {}
+    } catch { /* file read failed, use defaults */ }
     return this.getDefaultAnalytics();
   }
 
@@ -341,6 +342,7 @@ export class ServerTelemetry {
     if (!this.enabled) return;
 
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require('fs');
       const toStore = {
         ...this.data,

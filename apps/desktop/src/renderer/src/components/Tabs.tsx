@@ -1,6 +1,6 @@
 import React from 'react';
 
-interface Tab {
+export interface Tab {
   id: string;
   label: string;
   icon?: string;
@@ -9,7 +9,7 @@ interface Tab {
 interface TabViewProps {
   activeTab: string;
   onChange: (tab: string) => void;
-  tabs: Tab[];
+  tabs: readonly Tab[] | Tab[];
 }
 
 export function TabView({ activeTab, onChange, tabs }: TabViewProps) {
