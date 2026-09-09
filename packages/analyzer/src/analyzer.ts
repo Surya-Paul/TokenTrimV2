@@ -128,10 +128,10 @@ const SEMANTIC_PATTERNS: Array<{ type: SemanticComponent['type']; pattern: RegEx
     type: 'objective',
     pattern: /\b(?:goal|objective|aim|purpose|task|mission)\s*[:-]\s*(.+)/gi
   },
-  {
+{
     type: 'instruction',
-    pattern: /\b(?:you must|you should|please|ensure|make sure|remember to|don't forget to)\s+(.+)/gi
-  },
+    pattern: /\b(?:you must|you should|ensure|make sure|remember to|don't forget to)\s+(.+)/gi
+},
   {
     type: 'constraint',
     pattern: /\b(?:constraint|limit|restriction|boundary|maximum|minimum|exactly|precisely|at most|at least|no more than|no less than)\s+(.+)/gi

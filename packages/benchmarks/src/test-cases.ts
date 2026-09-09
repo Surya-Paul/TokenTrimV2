@@ -4,27 +4,27 @@ export const BENCHMARK_CASES: BenchmarkCase[] = [
   // Normal prompts
   {
     id: 'normal-001',
-    name: 'Simple question',
+    name: 'Simple question with context',
     category: 'normal_prompts',
-    input: 'What is the capital of France?',
-    expectedMinReduction: 0.1,
+    input: 'Could you please tell me what is the capital city of France, as I need this information for my geography homework assignment?',
+    expectedMinReduction: 0.15,
     expectedMaxReduction: 0.4,
-    mustPreserve: ['capital', 'France'],
+    mustPreserve: ['capital', 'France', 'geography', 'homework'],
     mustNotContain: [],
     targetModel: 'gpt-4',
-    tags: ['short', 'question']
+    tags: ['question', 'context']
   },
   {
     id: 'normal-002',
-    name: 'Explanatory request',
+    name: 'Explanatory request with detail',
     category: 'normal_prompts',
-    input: 'Please explain how photosynthesis works in simple terms that a 10-year-old could understand.',
+    input: 'Please explain how photosynthesis works in simple terms that a 10-year-old could understand, because I would like to teach this to my child and it would be really helpful if you could break it down step by step with simple analogies.',
     expectedMinReduction: 0.15,
     expectedMaxReduction: 0.45,
-    mustPreserve: ['photosynthesis', 'simple terms', '10-year-old', 'understand'],
+    mustPreserve: ['photosynthesis', 'simple terms', '10-year-old', 'understand', 'teach', 'child', 'break it down', 'step by step'],
     mustNotContain: [],
     targetModel: 'gpt-4',
-    tags: ['medium', 'explanation']
+    tags: ['medium', 'explanation', 'detailed']
   },
   {
     id: 'normal-003',
