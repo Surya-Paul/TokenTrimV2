@@ -2,6 +2,8 @@
   "name": "@tokentrim/desktop",
   "version": "1.0.0",
   "private": true,
+  "description": "TokenTrim - Model-aware LLM input optimization",
+  "author": "TokenTrim Contributors",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "concurrently \"pnpm run dev:main\" \"pnpm run dev:renderer\" \"pnpm run dev:preload\" \"sleep 3 && NODE_ENV=development electron .\"",
@@ -17,7 +19,8 @@
     "test:watch": "vitest",
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
-    "package": "electron-builder"
+    "package": "electron-builder",
+    "rebuild": "electron-rebuild -f -w keytar"
   },
   "dependencies": {
     "@tokentrim/core": "workspace:*",
@@ -36,6 +39,7 @@
     "concurrently": "^8.2.2",
     "electron": "^30.5.1",
     "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.6.0",
     "eslint": "^8.57.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -48,7 +52,8 @@
     "productName": "TokenTrim",
     "copyright": "Copyright © 2024 TokenTrim",
     "directories": {
-      "output": "dist/electron"
+      "output": "dist/electron",
+      "app": "."
     },
     "files": [
       "dist/**/*",

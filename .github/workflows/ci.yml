@@ -176,6 +176,15 @@ jobs:
       - name: Build packages
         run: pnpm build:all
 
+      - name: Rebuild native dependencies
+        if: runner.os != 'Windows'
+        run: pnpm --filter @tokentrim/desktop rebuild
+
+      - name: Rebuild native dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm --filter @tokentrim/desktop rebuild
+        shell: cmd
+
       - name: Build desktop app
         run: pnpm --filter @tokentrim/desktop package
         env:
