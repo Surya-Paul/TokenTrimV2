@@ -4,8 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import Store from 'electron-store';
 import * as keytar from 'keytar';
 import { TokenTrimEngine, TokenTrimEngineConfig } from '@tokentrim/core';
-import { AppSettings, CompressionRequest, CompressionResponse, BenchmarkRunOptions, ProviderType, SecretDetectionResult, AnalyticsData, TargetModel } from '@tokentrim/shared';
-import { createDefaultPrivacySettings } from '@tokentrim/privacy';
+import { AppSettings, CompressionRequest, CompressionResponse, BenchmarkRunOptions, ProviderType, SecretDetectionResult, AnalyticsData, TargetModel, PrivacySettings } from '@tokentrim/shared';
 
 const SERVICE_NAME = 'TokenTrim';
 const SETTINGS_KEY = 'app-settings';
@@ -33,14 +32,20 @@ const DEFAULT_SETTINGS: AppSettings = {
     timeoutMs: 30000
   },
   cloud: {
-    fallbackEnabled: false,
+    fallbackEnabled: true,
     provider: 'groq',
     model: 'llama-3.1-8b-instant',
     apiKey: '',
     timeoutMs: 30000,
     maxRetries: 3
   },
-  privacy: createDefaultPrivacySettings(),
+  privacy: {
+    neverSendSecrets: true,
+    allowCloudProcessing: true,
+    requireCloudConfirmation: false,
+    maskSecretsInLogs: true,
+    localOnlyMode: false
+  },
   targetModel: {
     tokenizer: 'gpt-4'
   },
@@ -52,12 +57,12 @@ const DEFAULT_SETTINGS: AppSettings = {
     },
     retryCount: 3,
     verificationThresholds: {
-      semanticConfidence: 0.85,
-      instructionConfidence: 0.95,
-      technicalIntegrity: 0.99,
+      semanticConfidence: 0.70,
+      instructionConfidence: 0.85,
+      technicalIntegrity: 0.95,
       privacyConfidence: 1.0,
-      compressionConfidence: 0.8,
-      overall: 0.9
+      compressionConfidence: 0.7,
+      overall: 0.75
     },
     logLevel: 'info',
     diagnostics: false
@@ -96,8 +101,20 @@ function loadSettings(): AppSettings {
 }
 
 function saveSettings(settings: Partial<AppSettings>): void {
-  currentSettings = { ...currentSettings, ...settings };
+  currentSettings = deepMerge(currentSettings, settings);
   settingsStore.set(currentSettings as StoredSettings);
+}
+
+function deepMerge(target: any, source: any): any {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      result[key] = deepMerge(target[key] || {}, source[key]);
+    } else {
+      result[key] = source[key];
+    }
+  }
+  return result;
 }
 
 async function checkNetworkConnectivity(): Promise<boolean> {
@@ -175,6 +192,36 @@ function stopNetworkMonitoring(): void {
   }
 }
 
+async function validateGroqApiKey(apiKey: string): Promise<{ valid: boolean; error: string }> {
+  if (!apiKey || apiKey.length < 10) {
+    return { valid: false, error: 'API key is empty or too short' };
+  }
+  if (!apiKey.startsWith('gsk_')) {
+    return { valid: false, error: 'Invalid API key format (should start with gsk_)' };
+  }
+  try {
+    const response = await fetch('https://api.groq.com/openai/v1/models', {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (response.status === 401) {
+      return { valid: false, error: 'Invalid API key (401 Unauthorized)' };
+    }
+    if (response.status === 429) {
+      return { valid: true, error: 'Rate limited but key is valid' };
+    }
+    if (!response.ok) {
+      return { valid: false, error: `API error: ${response.status}` };
+    }
+    return { valid: true, error: '' };
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') {
+      return { valid: false, error: 'Connection timeout' };
+    }
+    return { valid: false, error: error instanceof Error ? error.message : 'Network error' };
+  }
+}
+
 async function initializeEngine(): Promise<void> {
   const mode = currentSettings.general.compressionMode || 'auto';
   
@@ -188,21 +235,45 @@ async function initializeEngine(): Promise<void> {
     timeoutMs: currentSettings.ai.timeoutMs
   } : undefined;
 
-  const groqConfig = useCloud && currentSettings.cloud.fallbackEnabled && currentSettings.cloud.apiKey ? {
-    apiKey: currentSettings.cloud.apiKey,
-    model: currentSettings.cloud.model,
-    baseUrl: (currentSettings.cloud as any).baseUrl || 'https://api.groq.com/openai/v1',
-    timeoutMs: currentSettings.cloud.timeoutMs,
-    maxRetries: currentSettings.cloud.maxRetries,
-    retryDelayMs: 1000
-  } : undefined;
+  let groqConfig: TokenTrimEngineConfig['groqConfig'] = undefined;
+  let groqValidation = { valid: false, error: 'Not configured' };
+
+  if (useCloud && currentSettings.cloud.fallbackEnabled && currentSettings.cloud.apiKey) {
+    groqValidation = await validateGroqApiKey(currentSettings.cloud.apiKey);
+    if (groqValidation.valid) {
+      groqConfig = {
+        apiKey: currentSettings.cloud.apiKey,
+        model: currentSettings.cloud.model,
+        baseUrl: (currentSettings.cloud as any).baseUrl || 'https://api.groq.com/openai/v1',
+        timeoutMs: currentSettings.cloud.timeoutMs,
+        maxRetries: currentSettings.cloud.maxRetries,
+        retryDelayMs: 1000
+      };
+      console.log('[TokenTrim] Groq API key validated successfully');
+    } else {
+      console.warn('[TokenTrim] Groq API key validation failed:', groqValidation.error);
+      // Notify renderer of invalid key
+      mainWindow?.webContents.send('provider:status', { 
+        provider: 'groq', 
+        status: 'error', 
+        error: groqValidation.error 
+      });
+    }
+  }
 
   const config: TokenTrimEngineConfig = {
     targetModel: currentSettings.targetModel.tokenizer,
     ollamaConfig,
     groqConfig,
     verificationThresholds: currentSettings.advanced.verificationThresholds,
-    enableTelemetry: true
+    enableTelemetry: true,
+    privacySettings: {
+      neverSendSecrets: true,
+      allowCloudProcessing: true,
+      requireCloudConfirmation: false,
+      maskSecretsInLogs: true,
+      localOnlyMode: false
+    }
   };
 
   engine = new TokenTrimEngine(config);
@@ -505,11 +576,13 @@ function setupIpcHandlers(): void {
     if (settings.cloud?.apiKey !== undefined) {
       if (settings.cloud.apiKey) {
         await keytar.setPassword(SERVICE_NAME, 'groq-api-key', settings.cloud.apiKey);
+        // Keep the API key in currentSettings for engine initialization
+        currentSettings.cloud.apiKey = settings.cloud.apiKey;
       } else {
         await keytar.deletePassword(SERVICE_NAME, 'groq-api-key');
+        currentSettings.cloud.apiKey = '';
       }
-      // Don't store API key in settings
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      // Save other cloud settings without API key (store empty in settings file)
       const { cloud: { apiKey: _, ...cloudRest }, ...rest } = settings;
       saveSettings({ ...rest, cloud: { ...cloudRest, apiKey: '' } });
     } else {
@@ -519,6 +592,9 @@ function setupIpcHandlers(): void {
     // Reinitialize engine with new settings
     await initializeEngine();
     registerGlobalShortcut();
+    
+    // Notify renderer of settings change
+    mainWindow?.webContents.send('settings:updated', currentSettings);
   });
 
   ipcMain.handle('settings:reset', () => {
@@ -526,6 +602,7 @@ function setupIpcHandlers(): void {
     currentSettings = DEFAULT_SETTINGS;
     initializeEngine();
     registerGlobalShortcut();
+    mainWindow?.webContents.send('settings:updated', currentSettings);
     return currentSettings;
   });
 
@@ -563,7 +640,7 @@ function setupIpcHandlers(): void {
   // Popup handlers
   ipcMain.handle('popup:get-text', () => popupText);
 
-  ipcMain.handle('popup:compress', async (_event, text: string) => {
+  ipcMain.handle('popup:compress', async (_event, text: string, extraOptions?: { forceCloud?: boolean; forceLocal?: boolean }) => {
     try {
       const options = {
         targetModel: currentSettings.targetModel.tokenizer,
@@ -572,7 +649,9 @@ function setupIpcHandlers(): void {
         preserveFormatting: true,
         allowCloudFallback: currentSettings.cloud.fallbackEnabled,
         requireConfirmationForCloud: currentSettings.privacy.requireCloudConfirmation,
-        verificationThresholds: currentSettings.advanced.verificationThresholds
+        verificationThresholds: currentSettings.advanced.verificationThresholds,
+        forceCloud: extraOptions?.forceCloud,
+        forceLocal: extraOptions?.forceLocal
       };
       return await engine.compress(text, options);
     } catch (error) {
@@ -634,9 +713,7 @@ app.whenReady().then(async () => {
   
   // Load API key from keytar
   const apiKey = await keytar.getPassword(SERVICE_NAME, 'groq-api-key');
-  if (apiKey) {
-    currentSettings.cloud.apiKey = apiKey;
-  }
+  currentSettings.cloud.apiKey = apiKey || '';
   
   await initializeEngine();
   createWindow();

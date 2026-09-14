@@ -43,11 +43,11 @@ const ALLOWED_CHANNELS = {
 
 // Type-safe IPC wrapper
 function createSafeInvoke<T extends string>(channel: T) {
-  return (payload: any) => {
+  return (...args: any[]) => {
     if (!ALLOWED_CHANNELS.invoke.includes(channel as any)) {
       throw new Error(`Channel ${channel} not allowed for invoke`);
     }
-    return ipcRenderer.invoke(channel, payload);
+    return ipcRenderer.invoke(channel, ...args);
   };
 }
 
@@ -121,7 +121,7 @@ contextBridge.exposeInMainWorld('tokentrim', {
   // Popup
   popup: {
     getText: createSafeInvoke('popup:get-text'),
-    compress: createSafeInvoke('popup:compress'),
+    compress: (text: string, options?: { forceCloud?: boolean; forceLocal?: boolean }) => createSafeInvoke('popup:compress')(text, options),
     apply: createSafeInvoke('popup:apply'),
     cancel: createSafeInvoke('popup:cancel')
   },
@@ -168,7 +168,7 @@ declare global {
       };
       popup: {
         getText: () => Promise<string>;
-        compress: (text: string) => Promise<CompressionResult>;
+        compress: (text: string, options?: { forceCloud?: boolean; forceLocal?: boolean }) => Promise<CompressionResult>;
         apply: (compressedText: string) => Promise<void>;
         cancel: () => Promise<void>;
       };

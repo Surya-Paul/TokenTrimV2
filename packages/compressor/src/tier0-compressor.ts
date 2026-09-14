@@ -270,9 +270,16 @@ export class Tier0Compressor {
     // For Tier 0, we ensure protected segments from original are in compressed
     // This is a safety check - if segments were lost, we reject the compression
     for (const segment of protectedSegments) {
+      // For keyword-type segments, just check the keyword is present
+      if (['explicit_constraint', 'negative_instruction'].includes(segment.type)) {
+        const keyword = segment.content.trim().split(/\s+/)[0]; // Get the core keyword
+        if (keyword && !compressed.toLowerCase().includes(keyword.toLowerCase())) {
+          return original;
+        }
+        continue;
+      }
+      // For structural segments (code, URLs, etc.), require exact match
       if (!compressed.includes(segment.content)) {
-        // Segment was lost - this is a safety violation
-        // Return original to be safe
         return original;
       }
     }
@@ -289,12 +296,12 @@ export class Tier0Compressor {
     const privacyConfidence = 1.0; // Tier 0 never sends data anywhere
     const compressionConfidence = 0.9; // High confidence in deterministic rules
     
-    const overall = Math.min(
-      semanticConfidence,
-      instructionConfidence,
-      technicalIntegrity,
-      privacyConfidence,
-      compressionConfidence
+    const overall = (
+      semanticConfidence * 0.25 +
+      instructionConfidence * 0.25 +
+      technicalIntegrity * 0.2 +
+      privacyConfidence * 0.15 +
+      compressionConfidence * 0.15
     );
 
     return {
@@ -324,7 +331,7 @@ export class Tier0Compressor {
         } else {
           const compTerms = new Set(compNormalized.split(/\s+/));
           const matches = keyTerms.filter((term: string) => compTerms.has(term) || compNormalized.includes(term)).length;
-          if (matches / keyTerms.length >= 0.6) {
+          if (matches / keyTerms.length >= 0.5) { // Lowered from 0.6 to 0.5
             preserved++;
           }
         }

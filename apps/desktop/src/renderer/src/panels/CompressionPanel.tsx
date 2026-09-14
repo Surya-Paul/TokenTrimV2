@@ -2,25 +2,9 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { Card, CardHeader, CardContent, CardFooter } from '../components/Card';
 import { Button } from '../components/Button';
 import { Textarea } from '../components/Textarea';
-import { Select, SelectOption } from '../components/Select';
 import { Badge } from '../components/Badge';
 import { Tooltip } from '../components/Tooltip';
 import type { CompressionResult, AppSettings, TargetModel } from '@tokentrim/shared';
-
-const TARGET_MODELS: SelectOption[] = [
-  { value: 'gpt-4', label: 'GPT-4 / GPT-4 Turbo' },
-  { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-  { value: 'claude-3-opus', label: 'Claude 3 Opus' },
-  { value: 'claude-3-sonnet', label: 'Claude 3 Sonnet' },
-  { value: 'claude-3-haiku', label: 'Claude 3 Haiku' },
-  { value: 'gemini-pro', label: 'Gemini Pro' },
-  { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-  { value: 'llama-3-70b', label: 'Llama 3 70B' },
-  { value: 'llama-3-8b', label: 'Llama 3 8B' },
-  { value: 'qwen-2.5-72b', label: 'Qwen 2.5 72B' },
-  { value: 'phi-4-mini', label: 'Phi-4 Mini' },
-  { value: 'custom', label: 'Custom / Generic' }
-];
 
 interface CompressionPanelProps {
   settings: AppSettings | null;
@@ -31,8 +15,6 @@ export function CompressionPanel({ settings, onSettingsChange }: CompressionPane
   const [inputText, setInputText] = useState('');
   const [result, setResult] = useState<CompressionResult | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
-  const [targetModel, setTargetModel] = useState<TargetModel>(settings?.targetModel.tokenizer || 'gpt-4');
-  const [showDiff, setShowDiff] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Load from clipboard on mount
@@ -50,7 +32,9 @@ export function CompressionPanel({ settings, onSettingsChange }: CompressionPane
     loadFromClipboard();
   }, []);
 
-  const handleCompress = useCallback(async () => {
+  const [forceMode, setForceMode] = useState<'auto' | 'cloud' | 'local'>('auto');
+
+  const handleCompress = useCallback(async (overrideMode?: 'cloud' | 'local') => {
     if (!inputText.trim() || isCompressing) return;
 
     setIsCompressing(true);
@@ -58,14 +42,17 @@ export function CompressionPanel({ settings, onSettingsChange }: CompressionPane
     setResult(null);
 
     try {
+      const targetModel = settings?.targetModel.tokenizer || 'gpt-4';
       const compressionOptions = {
         targetModel,
         maxCompressionRatio: settings?.general.compressionTarget === 'aggressive' ? 0.5 : 
                             settings?.general.compressionTarget === 'conservative' ? 0.2 : 0.35,
         preserveFormatting: true,
         allowCloudFallback: settings?.cloud.fallbackEnabled || false,
-        requireConfirmationForCloud: settings?.privacy.requireCloudConfirmation || false,
-        verificationThresholds: settings?.advanced.verificationThresholds
+        requireConfirmationForCloud: false,
+        verificationThresholds: settings?.advanced.verificationThresholds,
+        forceCloud: overrideMode === 'cloud' || forceMode === 'cloud',
+        forceLocal: overrideMode === 'local' || forceMode === 'local'
       };
 
       const response = await window.tokentrim.compress({
@@ -83,7 +70,7 @@ export function CompressionPanel({ settings, onSettingsChange }: CompressionPane
     } finally {
       setIsCompressing(false);
     }
-  }, [inputText, targetModel, settings, isCompressing]);
+  }, [inputText, settings, isCompressing, forceMode]);
 
   const handleCopyResult = async () => {
     if (result?.bestCandidate) {
@@ -159,22 +146,48 @@ export function CompressionPanel({ settings, onSettingsChange }: CompressionPane
         </CardContent>
         <CardFooter>
           <div className="flex items-center justify-between w-full">
-            <Select
-              value={targetModel}
-              onChange={e => setTargetModel(e.target.value as TargetModel)}
-              options={TARGET_MODELS}
-              style={{ width: 200 }}
-            />
-            <Button 
-              variant="primary" 
-              size="lg"
-              onClick={handleCompress}
-              disabled={isCompressing || !inputText.trim()}
-              className="btn-block"
-              style={{ maxWidth: 280 }}
-            >
-              {isCompressing ? 'Optimizing...' : '✂️ Optimize'}
-            </Button>
+            <div className="flex items-center gap-4">
+              <span className="text-sm text-muted">Target: {settings?.targetModel.tokenizer || 'gpt-4'}</span>
+              <select 
+                value={forceMode} 
+                onChange={e => setForceMode(e.target.value as 'auto' | 'cloud' | 'local')}
+                style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--color-border)', background: 'var(--color-bg)', fontSize: 12 }}
+              >
+                <option value="auto">Auto</option>
+                <option value="cloud">Force Cloud</option>
+                <option value="local">Force Local</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-4">
+              <Button 
+                variant="secondary" 
+                size="sm"
+                onClick={() => handleCompress('cloud')}
+                disabled={isCompressing || !inputText.trim()}
+                title="Force cloud compression (Groq)"
+              >
+                ☁️ Cloud
+              </Button>
+              <Button 
+                variant="secondary" 
+                size="sm"
+                onClick={() => handleCompress('local')}
+                disabled={isCompressing || !inputText.trim()}
+                title="Force local compression (Ollama)"
+              >
+                💻 Local
+              </Button>
+              <Button 
+                variant="primary" 
+                size="lg"
+                onClick={() => handleCompress()}
+                disabled={isCompressing || !inputText.trim()}
+                className="btn-block"
+                style={{ maxWidth: 280 }}
+              >
+                {isCompressing ? 'Optimizing...' : '✂️ Optimize'}
+              </Button>
+            </div>
           </div>
         </CardFooter>
       </Card>

@@ -80,7 +80,6 @@ function App() {
   const handleSettingsChange = useCallback(async (newSettings: Partial<AppSettings>) => {
     try {
       await window.tokentrim.settings.set(newSettings);
-      setSettings(prev => prev ? { ...prev, ...newSettings } : null);
     } catch (error) {
       console.error('Failed to save settings:', error);
     }

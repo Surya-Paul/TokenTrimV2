@@ -174,6 +174,8 @@ export interface CompressionOptions {
   allowCloudFallback?: boolean;
   requireConfirmationForCloud?: boolean;
   verificationThresholds?: VerificationThresholds;
+  forceCloud?: boolean;
+  forceLocal?: boolean;
 }
 
 // ============================================================================

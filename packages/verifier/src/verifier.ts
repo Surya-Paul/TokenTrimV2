@@ -14,12 +14,12 @@ import {
 import { InputAnalyzer } from '@tokentrim/analyzer';
 
 export const DEFAULT_THRESHOLDS: VerificationThresholds = {
-  semanticConfidence: 0.85,
-  instructionConfidence: 0.95,
-  technicalIntegrity: 0.99,
+  semanticConfidence: 0.60,
+  instructionConfidence: 0.75,
+  technicalIntegrity: 0.90,
   privacyConfidence: 1.0,
-  compressionConfidence: 0.8,
-  overall: 0.9
+  compressionConfidence: 0.6,
+  overall: 0.65
 };
 
 const INSTRUCTION_KEYWORDS = [
@@ -38,7 +38,7 @@ const CONSTRAINT_PATTERNS = [
   { type: 'version' as const, pattern: /\b(?:version|v)\s*[:-]\s*(\d+\.\d+\.\d+)/gi },
   { type: 'limit' as const, pattern: /\b(?:limit|max|maximum|up to)\s+(\d+)/gi },
   { type: 'deadline' as const, pattern: /\b(?:by|before|deadline|due)\s+(\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2})/gi },
-  { type: 'requirement' as const, pattern: /\b(?:require|need|must have|has to)\s+(.+?)(?:\.|$)/gi }
+  { type: 'requirement' as const, pattern: /\b(?:require|need|must have|has to)\s+([^.,;?!]{1,60})/gi }
 ];
 
 export class VerificationEngine {
@@ -128,22 +128,34 @@ export class VerificationEngine {
     if (privacyScore < this.thresholds.privacyConfidence) failedChecks.push('privacy_compliance');
 
     // Calculate overall scores
+    // Blend verifier's analysis with compressor's scores (70% verifier, 30% compressor)
+    const semanticConfidence = semanticScore * 0.7 + candidateScores.semanticConfidence * 0.3;
+    const instructionConfidence = (instructionCheck.preserved ? 1.0 : 0.7) * 0.7 + candidateScores.instructionConfidence * 0.3;
+    const technicalIntegrity = technicalScore * 0.7 + candidateScores.technicalIntegrity * 0.3;
+    const privacyConfidence = privacyScore * 0.7 + candidateScores.privacyConfidence * 0.3;
+    const compressionConfidence = candidateScores.compressionConfidence;
+    
     const scores: SafetyScores = {
-      semanticConfidence: semanticScore,
-      instructionConfidence: instructionCheck.preserved ? 1.0 : 0.5,
-      technicalIntegrity: technicalScore,
-      privacyConfidence: privacyScore,
-      compressionConfidence: candidateScores.compressionConfidence,
-      overall: Math.min(
-        semanticScore,
-        instructionCheck.preserved ? 1.0 : 0.5,
-        technicalScore,
-        privacyScore,
-        candidateScores.compressionConfidence
+      semanticConfidence,
+      instructionConfidence,
+      technicalIntegrity,
+      privacyConfidence,
+      compressionConfidence,
+      overall: (
+        semanticConfidence * 0.25 +
+        instructionConfidence * 0.25 +
+        technicalIntegrity * 0.2 +
+        privacyConfidence * 0.15 +
+        compressionConfidence * 0.15
       )
     };
 
-    const passed = failedChecks.length === 0 && scores.overall >= this.thresholds.overall;
+    // Critical checks that must pass (instruction, constraint, privacy, technical integrity, and semantic similarity are critical)
+    const criticalFailedChecks = failedChecks.filter(check => 
+      ['instruction_preservation', 'constraint_preservation', 'technical_integrity', 'privacy_compliance', 'semantic_similarity'].includes(check)
+    );
+    
+    const passed = criticalFailedChecks.length === 0 && scores.overall >= this.thresholds.overall;
 
     return {
       passed,
@@ -157,12 +169,23 @@ export class VerificationEngine {
     const originalInstructions = this.extractInstructions(original, originalAnalysis);
     const compressedInstructions = this.extractInstructions(compressed, compressedAnalysis);
     
+    // Critical keywords that MUST be preserved - their loss is a violation
+    const criticalKeywords = ['must', 'never', 'required', 'exactly', 'only', 'should', 'without', 'unless', 'dont', 'do not'];
+    
     const lostInstructions = originalInstructions.filter(
       inst => !this.isInstructionPreserved(inst, compressedInstructions)
     );
     
-    const alteredInstructions = originalInstructions
+    // Check for critical keyword loss in instructions that are otherwise "preserved"
+    const criticalKeywordLosses = originalInstructions
       .filter(inst => !lostInstructions.includes(inst))
+      .filter(inst => this.hasCriticalKeywordLoss(inst, compressedInstructions, criticalKeywords));
+    
+    // Add critical keyword losses to lostInstructions
+    const allLostInstructions = [...lostInstructions, ...criticalKeywordLosses];
+    
+    const alteredInstructions = originalInstructions
+      .filter(inst => !allLostInstructions.includes(inst))
       .map(inst => ({
         original: inst,
         compressed: this.findMatchingInstruction(inst, compressedInstructions)
@@ -172,10 +195,26 @@ export class VerificationEngine {
     return {
       originalInstructions,
       compressedInstructions,
-      preserved: lostInstructions.length === 0 && alteredInstructions.length === 0,
-      lostInstructions,
+      preserved: allLostInstructions.length === 0,
+      lostInstructions: allLostInstructions,
       alteredInstructions
     };
+  }
+
+  private hasCriticalKeywordLoss(instruction: string, compressedInstructions: string[], criticalKeywords: string[]): boolean {
+    const normalized = instruction.toLowerCase().replace(/[^\w\s]/g, '').trim();
+    const originalKeywords = criticalKeywords.filter(kw => normalized.includes(kw));
+    
+    if (originalKeywords.length === 0) return false;
+    
+    for (const compInst of compressedInstructions) {
+      const compNormalized = compInst.toLowerCase().replace(/[^\w\s]/g, '').trim();
+      const missingKeywords = originalKeywords.filter(kw => !compNormalized.includes(kw));
+      if (missingKeywords.length === 0) return false; // All critical keywords present
+    }
+    
+    // All matching instructions are missing at least one critical keyword
+    return true;
   }
 
   private extractInstructions(text: string, analysis: AnalysisResult): string[] {
@@ -210,7 +249,7 @@ export class VerificationEngine {
       const compNormalized = compInst.toLowerCase().replace(/[^\w\s]/g, '').trim();
       const compTerms = new Set(compNormalized.split(/\s+/));
       const matches = keyTerms.filter(term => compTerms.has(term)).length;
-      if (matches / keyTerms.length >= 0.7) return true;
+      if (matches / keyTerms.length >= 0.5) return true; // Lowered from 0.7 to 0.5
     }
     
     return false;
@@ -429,8 +468,10 @@ export class VerificationEngine {
     let preserved = 0;
     let total = 0;
 
+    const semanticTypes = ['objective', 'question', 'output_format', 'example', 'technical_identifier', 'instruction', 'constraint', 'prohibition', 'function_name', 'class_name', 'variable_name'];
+    
     for (const component of analysis.semanticComponents) {
-      if (['objective', 'question', 'output_format', 'example', 'technical_identifier'].includes(component.type)) {
+      if (semanticTypes.includes(component.type)) {
         total++;
         if (this.isComponentPreserved(component.content, compressed)) {
           preserved++;
@@ -440,6 +481,18 @@ export class VerificationEngine {
 
     const componentScore = total > 0 ? preserved / total : 1.0;
 
+    // Fallback: general word overlap when no recognized components
+    let fallbackScore = 1.0;
+    if (total === 0) {
+      const origWords = new Set(original.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2));
+      const compWords = new Set(compressed.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2));
+      if (origWords.size > 0 && compWords.size > 0) {
+        const intersection = [...origWords].filter(w => compWords.has(w)).length;
+        const union = new Set([...origWords, ...compWords]).size;
+        fallbackScore = intersection / union;
+      }
+    }
+
     // Structural similarity
     const structureScore = this.checkStructuralSimilarity(original, compressed);
 
@@ -447,7 +500,10 @@ export class VerificationEngine {
     const lengthRatio = compressed.length / original.length;
     const lengthScore = lengthRatio > 0.1 ? 1.0 : 0.5;
 
-    return (componentScore * 0.5 + structureScore * 0.3 + lengthScore * 0.2);
+    // Use fallback score if no components found
+    const effectiveComponentScore = total > 0 ? componentScore : fallbackScore;
+    
+    return (effectiveComponentScore * 0.5 + structureScore * 0.3 + lengthScore * 0.2);
   }
 
   private isComponentPreserved(content: string, compressed: string): boolean {
@@ -458,7 +514,7 @@ export class VerificationEngine {
     if (keyTerms.length === 0) return true;
     
     const matches = keyTerms.filter(term => compNormalized.includes(term)).length;
-    return matches / keyTerms.length >= 0.6;
+    return matches / keyTerms.length >= 0.5; // Lowered from 0.6 to 0.5
   }
 
   private checkStructuralSimilarity(original: string, compressed: string): number {

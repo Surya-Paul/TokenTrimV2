@@ -9,13 +9,14 @@ import {
   TargetModel,
   ProcessingMode,
   VerificationThresholds,
-  SecretDetectionResult
+  SecretDetectionResult,
+  PrivacySettings
 } from '@tokentrim/shared';
 import { InputAnalyzer } from '@tokentrim/analyzer';
 import { Tier0Compressor } from '@tokentrim/compressor';
 import { AICompressor, AICompressionOptions } from '@tokentrim/compressor';
 import { VerificationEngine, DEFAULT_THRESHOLDS } from '@tokentrim/verifier';
-import { SecretDetector, createDefaultPrivacySettings } from '@tokentrim/privacy';
+import { SecretDetector } from '@tokentrim/privacy';
 import { ProviderFactory, OllamaProvider, GroqProvider, LLMProvider } from '@tokentrim/providers';
 import { tokenizerRegistry, createTokenizerConfig } from '@tokentrim/tokenizer';
 import { Telemetry } from '@tokentrim/telemetry';
@@ -35,7 +36,7 @@ export interface TokenTrimEngineConfig {
     maxRetries: number;
     retryDelayMs: number;
   };
-  privacySettings?: Partial<SecretDetectionResult>;
+  privacySettings?: PrivacySettings;
   verificationThresholds?: Partial<VerificationThresholds>;
   enableTelemetry?: boolean;
 }
@@ -73,7 +74,13 @@ export class TokenTrimEngine {
     this.tier0Compressor = new Tier0Compressor(config.targetModel);
     this.aiCompressor = new AICompressor(config.targetModel);
     this.verifier = new VerificationEngine(config.verificationThresholds || {}, config.targetModel);
-    this.privacyDetector = new SecretDetector(createDefaultPrivacySettings());
+    this.privacyDetector = new SecretDetector(config.privacySettings || {
+      neverSendSecrets: true,
+      allowCloudProcessing: true,
+      requireCloudConfirmation: false,
+      maskSecretsInLogs: true,
+      localOnlyMode: false
+    });
     this.providerFactory = new ProviderFactory();
     this.telemetry = new Telemetry(config.enableTelemetry !== false);
 
@@ -148,8 +155,10 @@ export class TokenTrimEngine {
         }
       }
 
-      // Step 5: Cloud fallback (if enabled and local failed)
-      if (!context.bestCandidate && cloudAllowed && this.groqProvider && options.allowCloudFallback) {
+      // Step 5: Cloud fallback (if enabled and local failed) or forced
+      const shouldTryCloud = (options.forceCloud || (!context.bestCandidate && options.allowCloudFallback)) && cloudAllowed && this.groqProvider;
+      
+      if (shouldTryCloud && !options.forceLocal) {
         context.mode = 'cloud';
         
         if (options.requireConfirmationForCloud) {
@@ -159,7 +168,7 @@ export class TokenTrimEngine {
         }
 
         context.aiCandidates = await this.aiCompressor.generateCandidates(text, {
-          provider: this.groqProvider,
+          provider: this.groqProvider!,
           analysis: context.analysis,
           targetModel: options.targetModel
         });
@@ -189,8 +198,13 @@ export class TokenTrimEngine {
   }
 
   private shouldAllowCloud(privacyScan: SecretDetectionResult, options: CompressionOptions): boolean {
-    // The engine doesn't track custom privacy settings directly here, we just use defaults for local checks
-    const privacySettings = createDefaultPrivacySettings();
+    const privacySettings = this.config.privacySettings || {
+      neverSendSecrets: true,
+      allowCloudProcessing: true,
+      requireCloudConfirmation: false,
+      maskSecretsInLogs: true,
+      localOnlyMode: false
+    };
 
     if (privacySettings.localOnlyMode) return false;
     if (!options.allowCloudFallback) return false;
@@ -202,12 +216,15 @@ export class TokenTrimEngine {
 
   private shouldTryAICompression(context: PipelineContext, options: CompressionOptions): boolean {
     // Don't use AI for very short prompts
-    if (context.originalTokens < 50) return false;
+    if (context.originalTokens < 20) return false;
     
     // Don't use AI if Tier 0 already achieved good compression with high confidence
     if (context.tier0Candidate) {
       const tier0Ratio = context.tier0Candidate.grossTokenReduction / context.originalTokens;
-      if (tier0Ratio > 0.25 && context.tier0Candidate.safetyScores.overall > 0.95) {
+      // For conservative, accept lower ratio since target is 10-20%
+      // For balanced/aggressive, require higher ratio
+      const minRatio = options.maxCompressionRatio ? options.maxCompressionRatio * 0.5 : 0.15;
+      if (tier0Ratio > minRatio && context.tier0Candidate.safetyScores.overall > 0.9) {
         return false; // Tier 0 is good enough
       }
     }
@@ -217,7 +234,11 @@ export class TokenTrimEngine {
     if (context.analysis.contentType === 'coding_prompt') return true;
     if (context.analysis.hasCodeBlocks) return true;
     
-    return options.maxCompressionRatio ? options.maxCompressionRatio > 0.2 : true;
+    // For all compression targets, try AI if Tier 0 wasn't sufficient
+    // Conservative: target 10-20%, so try AI if Tier 0 got < 10%
+    // Balanced: target 20-35%, so try AI if Tier 0 got < 15%
+    // Aggressive: target 35-50%, so try AI if Tier 0 got < 20%
+    return true;
   }
 
   private async verifyCandidate(
@@ -263,12 +284,13 @@ export class TokenTrimEngine {
     const processingTimeMs = Date.now() - startTime;
     
     if (!context.bestCandidate) {
+      const noCandidatesGenerated = context.aiCandidates.length === 0 && !context.tier0Candidate;
       return {
         originalText: context.originalText,
         bestCandidate: null,
         allCandidates: [context.tier0Candidate, ...context.aiCandidates].filter(Boolean) as CompressionCandidate[],
         accepted: false,
-        rejectionReason: 'No candidate passed verification',
+        rejectionReason: noCandidatesGenerated ? 'No compressible patterns found' : 'No candidate passed verification',
         processingTimeMs,
         originalTokens: context.originalTokens,
         finalTokens: context.originalTokens,

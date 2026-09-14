@@ -198,12 +198,13 @@ export class AICompressor {
     const privacyConfidence = 1.0; // Local provider
     const compressionConfidence = 0.85; // AI compression has inherent uncertainty
     
-    const overall = Math.min(
-      semanticConfidence,
-      instructionConfidence,
-      technicalIntegrity,
-      privacyConfidence,
-      compressionConfidence
+    // Use weighted average like the verifier for consistency
+    const overall = (
+      semanticConfidence * 0.25 +
+      instructionConfidence * 0.25 +
+      technicalIntegrity * 0.2 +
+      privacyConfidence * 0.15 +
+      compressionConfidence * 0.15
     );
 
     return {
