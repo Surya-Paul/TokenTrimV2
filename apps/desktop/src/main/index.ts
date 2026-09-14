@@ -102,7 +102,13 @@ function loadSettings(): AppSettings {
 
 function saveSettings(settings: Partial<AppSettings>): void {
   currentSettings = deepMerge(currentSettings, settings);
-  settingsStore.set(currentSettings as StoredSettings);
+  persistSettingsToDisk();
+}
+
+function persistSettingsToDisk(): void {
+  // Persist currentSettings to disk, but strip apiKey (stored in keytar)
+  const { cloud: { apiKey: _, ...cloudRest }, ...rest } = currentSettings;
+  settingsStore.set({ ...rest, cloud: { ...cloudRest, apiKey: '' } } as StoredSettings);
 }
 
 function deepMerge(target: any, source: any): any {
@@ -582,9 +588,9 @@ function setupIpcHandlers(): void {
         await keytar.deletePassword(SERVICE_NAME, 'groq-api-key');
         currentSettings.cloud.apiKey = '';
       }
-      // Save other cloud settings without API key (store empty in settings file)
+      // Save other cloud settings without API key (apiKey is handled by persistSettingsToDisk)
       const { cloud: { apiKey: _, ...cloudRest }, ...rest } = settings;
-      saveSettings({ ...rest, cloud: { ...cloudRest, apiKey: '' } });
+      saveSettings({ ...rest, cloud: cloudRest } as Partial<AppSettings>);
     } else {
       saveSettings(settings);
     }

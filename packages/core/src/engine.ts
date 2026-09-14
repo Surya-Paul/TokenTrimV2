@@ -123,34 +123,41 @@ export class TokenTrimEngine {
       // Check if we can use cloud
       const cloudAllowed = this.shouldAllowCloud(context.privacyScan, options);
       
-      // Step 3: Tier 0 deterministic compression
-      context.tier0Candidate = await this.tier0Compressor.compress(text, options);
-      
-      // Evaluate Tier 0
-      if (context.tier0Candidate) {
-        const tier0Verified = await this.verifyCandidate(context, context.tier0Candidate);
-        if (tier0Verified.passed) {
-          context.bestCandidate = context.tier0Candidate;
-          context.mode = 'local';
+      // When forceCloud is true, skip local compression entirely
+      const skipLocal = options.forceCloud === true;
+
+      // Step 3: Tier 0 deterministic compression (skip if forceCloud)
+      if (!skipLocal) {
+        context.tier0Candidate = await this.tier0Compressor.compress(text, options);
+        
+        // Evaluate Tier 0
+        if (context.tier0Candidate) {
+          const tier0Verified = await this.verifyCandidate(context, context.tier0Candidate);
+          if (tier0Verified.passed) {
+            context.bestCandidate = context.tier0Candidate;
+            context.mode = 'local';
+          }
         }
       }
 
-      // Step 4: AI Compression (if Tier 0 not sufficient or not accepted)
-      const shouldTryAI = this.shouldTryAICompression(context, options);
-      
-      if (shouldTryAI && this.ollamaProvider) {
-        context.mode = 'local';
-        context.aiCandidates = await this.aiCompressor.generateCandidates(text, {
-          provider: this.ollamaProvider,
-          analysis: context.analysis,
-          targetModel: options.targetModel
-        });
+      // Step 4: AI Compression (if Tier 0 not sufficient or not accepted) - skip if forceCloud
+      if (!skipLocal) {
+        const shouldTryAI = this.shouldTryAICompression(context, options);
+        
+        if (shouldTryAI && this.ollamaProvider) {
+          context.mode = 'local';
+          context.aiCandidates = await this.aiCompressor.generateCandidates(text, {
+            provider: this.ollamaProvider,
+            analysis: context.analysis,
+            targetModel: options.targetModel
+          });
 
-        // Verify AI candidates
-        for (const candidate of context.aiCandidates) {
-          const verified = await this.verifyCandidate(context, candidate);
-          if (verified.passed && this.isBetterCandidate(candidate, context.bestCandidate)) {
-            context.bestCandidate = candidate;
+          // Verify AI candidates
+          for (const candidate of context.aiCandidates) {
+            const verified = await this.verifyCandidate(context, candidate);
+            if (verified.passed && this.isBetterCandidate(candidate, context.bestCandidate)) {
+              context.bestCandidate = candidate;
+            }
           }
         }
       }
@@ -173,13 +180,27 @@ export class TokenTrimEngine {
           targetModel: options.targetModel
         });
 
+        let bestCloudCandidate: CompressionCandidate | null = null;
+        
         for (const candidate of context.aiCandidates) {
           candidate.tier = 'cloud_ai';
           candidate.provider = 'groq';
           const verified = await this.verifyCandidate(context, candidate);
-          if (verified.passed && this.isBetterCandidate(candidate, context.bestCandidate)) {
-            context.bestCandidate = candidate;
+          if (verified.passed) {
+            // When forceCloud, pick best cloud candidate directly without comparing to local
+            if (options.forceCloud) {
+              if (!bestCloudCandidate || this.isBetterCandidate(candidate, bestCloudCandidate)) {
+                bestCloudCandidate = candidate;
+              }
+            } else if (this.isBetterCandidate(candidate, context.bestCandidate)) {
+              context.bestCandidate = candidate;
+            }
           }
+        }
+        
+        // If forceCloud and we have a valid cloud candidate, use it
+        if (options.forceCloud && bestCloudCandidate) {
+          context.bestCandidate = bestCloudCandidate;
         }
       }
 
