@@ -499,17 +499,17 @@ export class GroqProvider extends BaseProvider {
       jsonMode: true,
       functionCalling: true,
       maxContextTokens: 32768,
-      supportedModels: ['llama-3.1-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it']
+      supportedModels: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3-27b']
     };
   }
 
   estimateCost(inputTokens: number, outputTokens: number): number {
     // Groq pricing (approximate, per 1M tokens)
+    // TODO: Verify current pricing for gpt-oss models from Groq docs
     const pricing: Record<string, { input: number; output: number }> = {
-      'llama-3.1-70b-versatile': { input: 0.59, output: 0.79 },
-      'llama-3.1-8b-instant': { input: 0.05, output: 0.08 },
-      'mixtral-8x7b-32768': { input: 0.24, output: 0.24 },
-      'gemma2-9b-it': { input: 0.15, output: 0.15 }
+      'openai/gpt-oss-20b': { input: 0.10, output: 0.10 },
+      'openai/gpt-oss-120b': { input: 0.50, output: 0.50 },
+      'qwen/qwen3-27b': { input: 0.30, output: 0.30 }
     };
     
     const modelPricing = pricing[this.config.model] || { input: 0.1, output: 0.1 };

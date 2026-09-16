@@ -34,7 +34,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   cloud: {
     fallbackEnabled: true,
     provider: 'groq',
-    model: 'llama-3.1-8b-instant',
+    model: 'openai/gpt-oss-20b',
     apiKey: '',
     timeoutMs: 30000,
     maxRetries: 3
@@ -85,11 +85,27 @@ function createSettingsStore(): Store<StoredSettings> {
     name: 'settings',
     defaults: {
       ...DEFAULT_SETTINGS,
-      version: 1
+      version: 2
     } as StoredSettings,
     migrations: {
       '1.0.0': (stored: any) => {
         return { ...stored, version: 1 } as unknown as StoredSettings;
+      },
+      '2.0.0': (stored: any) => {
+        const deprecatedModels = new Set([
+          'llama-3.1-8b-instant',
+          'llama-3.1-70b-versatile',
+          'mixtral-8x7b-32768',
+          'gemma2-9b-it'
+        ]);
+        
+        const migrated = { ...stored, version: 2 } as StoredSettings;
+        
+        if (migrated.cloud?.model && deprecatedModels.has(migrated.cloud.model)) {
+          migrated.cloud.model = DEFAULT_SETTINGS.cloud.model;
+        }
+        
+        return migrated;
       }
     }
   });

@@ -228,7 +228,7 @@ export class TokenTrimEngine {
     };
 
     if (privacySettings.localOnlyMode) return false;
-    if (!options.allowCloudFallback) return false;
+    if (!options.allowCloudFallback && !options.forceCloud) return false;
     if (privacyScan.hasSecrets && privacySettings.neverSendSecrets) return false;
     if (!privacySettings.allowCloudProcessing) return false;
     

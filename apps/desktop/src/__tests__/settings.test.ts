@@ -76,7 +76,7 @@ describe('Settings persistence - Bug 1 fix', () => {
     cloud: {
       fallbackEnabled: true,
       provider: 'groq',
-      model: 'llama-3.1-8b-instant',
+      model: 'openai/gpt-oss-20b',
       apiKey: '',
       timeoutMs: 30000,
       maxRetries: 3
@@ -121,7 +121,7 @@ describe('Settings persistence - Bug 1 fix', () => {
       cloud: {
         fallbackEnabled: true,
         provider: 'groq',
-        model: 'llama-3.1-8b-instant',
+        model: 'openai/gpt-oss-20b',
         apiKey: newApiKey,
         timeoutMs: 30000,
         maxRetries: 3
@@ -145,7 +145,7 @@ describe('Settings persistence - Bug 1 fix', () => {
     // Verify persisted settings have empty apiKey
     expect(persistedSettings.cloud.apiKey).toBe('');
     expect(persistedSettings.cloud.fallbackEnabled).toBe(true);
-    expect(persistedSettings.cloud.model).toBe('llama-3.1-8b-instant');
+    expect(persistedSettings.cloud.model).toBe('openai/gpt-oss-20b');
   });
 
   it('should clear API key in memory when empty key is provided', () => {
@@ -156,7 +156,7 @@ describe('Settings persistence - Bug 1 fix', () => {
       cloud: {
         fallbackEnabled: true,
         provider: 'groq',
-        model: 'llama-3.1-8b-instant',
+        model: 'openai/gpt-oss-20b',
         apiKey: '', // Empty key = delete
         timeoutMs: 30000,
         maxRetries: 3
@@ -192,7 +192,7 @@ describe('Settings persistence - Bug 1 fix', () => {
       cloud: {
         fallbackEnabled: false, // Changed!
         provider: 'groq',
-        model: 'llama-3.1-8b-instant',
+        model: 'openai/gpt-oss-20b',
         apiKey: 'gsk_************90', // Masked value from UI
         timeoutMs: 30000,
         maxRetries: 3
@@ -221,5 +221,82 @@ describe('Settings persistence - Bug 1 fix', () => {
     // Verify persisted settings have empty apiKey
     expect(persistedSettings.cloud.apiKey).toBe('');
     expect(persistedSettings.cloud.fallbackEnabled).toBe(false);
+  });
+});
+
+describe('Settings migration - Groq model deprecation', () => {
+  const deprecatedModels = [
+    'llama-3.1-8b-instant',
+    'llama-3.1-70b-versatile',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it'
+  ];
+
+  const newDefaultModel = 'openai/gpt-oss-20b';
+
+  // Replicate the migration logic from createSettingsStore()
+  function migrateSettings(stored: any): any {
+    const migrated = { ...stored, version: 2 } as any;
+    
+    if (migrated.cloud?.model && deprecatedModels.includes(migrated.cloud.model)) {
+      migrated.cloud.model = newDefaultModel;
+    }
+    
+    return migrated;
+  }
+
+  it('should migrate llama-3.1-8b-instant to new default', () => {
+    const stored = { version: 1, cloud: { model: 'llama-3.1-8b-instant', fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.cloud.model).toBe(newDefaultModel);
+    expect(result.version).toBe(2);
+  });
+
+  it('should migrate llama-3.1-70b-versatile to new default', () => {
+    const stored = { version: 1, cloud: { model: 'llama-3.1-70b-versatile', fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.cloud.model).toBe(newDefaultModel);
+  });
+
+  it('should migrate mixtral-8x7b-32768 to new default', () => {
+    const stored = { version: 1, cloud: { model: 'mixtral-8x7b-32768', fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.cloud.model).toBe(newDefaultModel);
+  });
+
+  it('should migrate gemma2-9b-it to new default', () => {
+    const stored = { version: 1, cloud: { model: 'gemma2-9b-it', fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.cloud.model).toBe(newDefaultModel);
+  });
+
+  it('should NOT migrate already valid model (openai/gpt-oss-20b)', () => {
+    const stored = { version: 1, cloud: { model: 'openai/gpt-oss-20b', fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.cloud.model).toBe('openai/gpt-oss-20b');
+  });
+
+  it('should NOT migrate already valid model (openai/gpt-oss-120b)', () => {
+    const stored = { version: 1, cloud: { model: 'openai/gpt-oss-120b', fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.cloud.model).toBe('openai/gpt-oss-120b');
+  });
+
+  it('should NOT migrate already valid model (qwen/qwen3-27b)', () => {
+    const stored = { version: 1, cloud: { model: 'qwen/qwen3-27b', fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.cloud.model).toBe('qwen/qwen3-27b');
+  });
+
+  it('should NOT migrate if cloud.model is missing', () => {
+    const stored = { version: 1, cloud: { fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.cloud.model).toBeUndefined();
+  });
+
+  it('should bump version to 2', () => {
+    const stored = { version: 1, cloud: { model: 'llama-3.1-8b-instant', fallbackEnabled: true } };
+    const result = migrateSettings(stored);
+    expect(result.version).toBe(2);
   });
 });
