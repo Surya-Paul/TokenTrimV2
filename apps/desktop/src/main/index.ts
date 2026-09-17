@@ -9,6 +9,13 @@ import { AppSettings, CompressionRequest, CompressionResponse, BenchmarkRunOptio
 const SERVICE_NAME = 'TokenTrim';
 const SETTINGS_KEY = 'app-settings';
 
+const DEPRECATED_GROQ_MODELS = new Set([
+  'llama-3.1-8b-instant',
+  'llama-3.1-70b-versatile',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it'
+]);
+
 interface StoredSettings extends AppSettings {
   version: number;
 }
@@ -81,13 +88,23 @@ let isOnline = true;
 let networkCheckInterval: NodeJS.Timeout | null = null;
 
 function createSettingsStore(): Store<StoredSettings> {
-  return new Store<StoredSettings>({
-    name: 'settings',
+  // IMPORTANT: The `projectVersion` option below MUST match the highest migration key in the
+  // `migrations` map. If a new migration key is added (e.g., '3.0.0'), this version
+  // MUST be bumped to match, otherwise electron-store will skip the new migration.
+  // See also: the `migrations` map below — its keys must not exceed this version.
+  const storeVersion = '2.0.0';
+  
+  const store = new Store<StoredSettings>({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...({ name: 'settings', projectVersion: storeVersion } as any),
     defaults: {
       ...DEFAULT_SETTINGS,
       version: 2
     } as StoredSettings,
     migrations: {
+      // IMPORTANT: Migration keys are semver strings. The highest key MUST NOT exceed
+      // the Store's `projectVersion` option above, or electron-store will silently skip it.
+      // When adding a new migration, bump the `projectVersion` option to match the new key.
       '1.0.0': (stored: any) => {
         return { ...stored, version: 1 } as unknown as StoredSettings;
       },
@@ -109,11 +126,27 @@ function createSettingsStore(): Store<StoredSettings> {
       }
     }
   });
+
+  // Diagnostic logging: show what electron-store resolved as the target version
+  // and what stored version it found before migrating. This helps catch version
+  // mismatches (like the bug where app.getVersion() = "1.0.0" skipped '2.0.0' migration).
+  const storedVersion = store.get('version') ?? 'none (first run)';
+  console.log(`[TokenTrim] Settings store initialized: targetVersion=${storeVersion}, storedVersion=${storedVersion}`);
+
+  return store;
 }
 
 function loadSettings(): AppSettings {
   const stored = settingsStore.store;
-  return { ...DEFAULT_SETTINGS, ...stored };
+  const merged = { ...DEFAULT_SETTINGS, ...stored };
+
+  if (merged.cloud?.model && DEPRECATED_GROQ_MODELS.has(merged.cloud.model)) {
+    console.log(`[TokenTrim] Normalizing deprecated cloud model "${merged.cloud.model}" -> "${DEFAULT_SETTINGS.cloud.model}"`);
+    merged.cloud.model = DEFAULT_SETTINGS.cloud.model;
+    settingsStore.set('cloud', merged.cloud);
+  }
+
+  return merged;
 }
 
 function saveSettings(settings: Partial<AppSettings>): void {
@@ -272,6 +305,7 @@ async function initializeEngine(): Promise<void> {
         retryDelayMs: 1000
       };
       console.log('[TokenTrim] Groq API key validated successfully');
+      console.log(`[TokenTrim] Groq config model resolved to: ${groqConfig.model}`);
     } else {
       console.warn('[TokenTrim] Groq API key validation failed:', groqValidation.error);
       // Notify renderer of invalid key

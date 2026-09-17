@@ -146,11 +146,17 @@ export class TokenTrimEngine {
         
         if (shouldTryAI && this.ollamaProvider) {
           context.mode = 'local';
-          context.aiCandidates = await this.aiCompressor.generateCandidates(text, {
-            provider: this.ollamaProvider,
-            analysis: context.analysis,
-            targetModel: options.targetModel
-          });
+          try {
+            context.aiCandidates = await this.aiCompressor.generateCandidates(text, {
+              provider: this.ollamaProvider,
+              analysis: context.analysis,
+              targetModel: options.targetModel
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error('[TokenTrim] Local AI compression (Ollama) failed:', message);
+            context.aiCandidates = [];
+          }
 
           // Verify AI candidates
           for (const candidate of context.aiCandidates) {

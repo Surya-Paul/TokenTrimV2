@@ -151,6 +151,8 @@ export class OllamaProvider extends BaseProvider {
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error('Ollama request timeout');
       }
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[TokenTrim] Ollama generate failed:', message);
       throw error;
     }
   }
@@ -196,10 +198,12 @@ export class OllamaProvider extends BaseProvider {
       return this.healthCheckCache;
     } catch (error) {
       this.status = 'unavailable';
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[TokenTrim] Ollama health check failed:', message);
       
       this.healthCheckCache = {
         healthy: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: message,
         modelAvailable: false,
         lastChecked: now
       };

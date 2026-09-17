@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AppSettings } from '@tokentrim/shared';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 // Mock electron-store
 const mockStore = {
@@ -298,5 +300,209 @@ describe('Settings migration - Groq model deprecation', () => {
     const stored = { version: 1, cloud: { model: 'llama-3.1-8b-instant', fallbackEnabled: true } };
     const result = migrateSettings(stored);
     expect(result.version).toBe(2);
+  });
+});
+
+describe('Settings migration - version reachability regression test', () => {
+  const indexPath = join(__dirname, '..', 'main', 'index.ts');
+  const source = readFileSync(indexPath, 'utf-8');
+
+  function extractStoreVersion(source: string): string {
+    const match = source.match(/const storeVersion = ['"]([^'"]+)['"]/);
+    if (!match) {
+      throw new Error('Could not find storeVersion in index.ts');
+    }
+    return match[1];
+  }
+
+  function extractMigrationKeys(source: string): string[] {
+    const migrationsMatch = source.match(/migrations:\s*{([^}]+)}/s);
+    if (!migrationsMatch) {
+      throw new Error('Could not find migrations map in index.ts');
+    }
+    const migrationsBlock = migrationsMatch[1];
+    const keyMatches = migrationsBlock.matchAll(/['"](\d+\.\d+\.\d+)['"]\s*:/g);
+    return Array.from(keyMatches, m => m[1]);
+  }
+
+  function semverCompare(a: string, b: string): number {
+    const aParts = a.split('.').map(Number);
+    const bParts = b.split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+      if (aParts[i] !== bParts[i]) return aParts[i] - bParts[i];
+    }
+    return 0;
+  }
+
+  it('Store version must be >= highest migration key (catches silent migration skip bug)', () => {
+    const storeVersion = extractStoreVersion(source);
+    const migrationKeys = extractMigrationKeys(source);
+
+    expect(migrationKeys.length).toBeGreaterThan(0);
+
+    const highestMigrationKey = migrationKeys.reduce((max, key) =>
+      semverCompare(key, max) > 0 ? key : max
+    );
+
+    expect(semverCompare(storeVersion, highestMigrationKey)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('All migration keys must be reachable (none exceed store version)', () => {
+    const storeVersion = extractStoreVersion(source);
+    const migrationKeys = extractMigrationKeys(source);
+
+    for (const key of migrationKeys) {
+      expect(semverCompare(storeVersion, key)).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+describe('Settings load - deprecated Groq model normalization', () => {
+  const DEPRECATED_GROQ_MODELS = new Set([
+    'llama-3.1-8b-instant',
+    'llama-3.1-70b-versatile',
+    'mixtral-8x7b-32768',
+    'gemma2-9b-it'
+  ]);
+
+  const DEFAULT_SETTINGS = {
+    general: {
+      enabled: true,
+      globalHotkey: 'CommandOrControl+Shift+T',
+      compressionTarget: 'balanced',
+      previewMode: true,
+      autoStart: false,
+      minimizeToTray: true,
+      theme: 'system',
+      compressionMode: 'auto'
+    },
+    ai: {
+      localEnabled: true,
+      provider: 'ollama',
+      model: 'phi4-mini',
+      endpoint: 'http://localhost:11434',
+      timeoutMs: 30000
+    },
+    cloud: {
+      fallbackEnabled: true,
+      provider: 'groq',
+      model: 'openai/gpt-oss-20b',
+      apiKey: '',
+      timeoutMs: 30000,
+      maxRetries: 3
+    },
+    privacy: {
+      neverSendSecrets: true,
+      allowCloudProcessing: true,
+      requireCloudConfirmation: false,
+      maskSecretsInLogs: true,
+      localOnlyMode: false
+    },
+    targetModel: {
+      tokenizer: 'gpt-4'
+    },
+    advanced: {
+      timeouts: { ollama: 30000, groq: 30000, verification: 10000 },
+      retryCount: 3,
+      verificationThresholds: {
+        semanticConfidence: 0.70,
+        instructionConfidence: 0.85,
+        technicalIntegrity: 0.95,
+        privacyConfidence: 1.0,
+        compressionConfidence: 0.7,
+        overall: 0.75
+      },
+      logLevel: 'info',
+      diagnostics: false
+    }
+  };
+
+  function normalizeCloudModel(stored: any, settingsStore: { set: (key: string, value: any) => void; store: any }) {
+    const merged = { ...DEFAULT_SETTINGS, ...stored };
+
+    if (merged.cloud?.model && DEPRECATED_GROQ_MODELS.has(merged.cloud.model)) {
+      merged.cloud.model = DEFAULT_SETTINGS.cloud.model;
+      settingsStore.set('cloud', merged.cloud);
+    }
+
+    return merged;
+  }
+
+  it('should normalize llama-3.1-8b-instant to default regardless of version field', () => {
+    const mockStore = { store: {}, set: vi.fn(function(this: any, key: string, value: any) { this.store[key] = value; }) };
+    const stored = { version: 1, cloud: { model: 'llama-3.1-8b-instant', fallbackEnabled: true } };
+    
+    const result = normalizeCloudModel(stored, mockStore);
+    
+    expect(result.cloud.model).toBe('openai/gpt-oss-20b');
+    expect(mockStore.set).toHaveBeenCalledWith('cloud', expect.objectContaining({ model: 'openai/gpt-oss-20b' }));
+  });
+
+  it('should normalize llama-3.1-70b-versatile to default regardless of version field', () => {
+    const mockStore = { store: {}, set: vi.fn(function(this: any, key: string, value: any) { this.store[key] = value; }) };
+    const stored = { version: 999, cloud: { model: 'llama-3.1-70b-versatile', fallbackEnabled: true } };
+    
+    const result = normalizeCloudModel(stored, mockStore);
+    
+    expect(result.cloud.model).toBe('openai/gpt-oss-20b');
+  });
+
+  it('should normalize mixtral-8x7b-32768 to default', () => {
+    const mockStore = { store: {}, set: vi.fn(function(this: any, key: string, value: any) { this.store[key] = value; }) };
+    const stored = { version: 2, cloud: { model: 'mixtral-8x7b-32768', fallbackEnabled: true } };
+    
+    const result = normalizeCloudModel(stored, mockStore);
+    
+    expect(result.cloud.model).toBe('openai/gpt-oss-20b');
+  });
+
+  it('should normalize gemma2-9b-it to default', () => {
+    const mockStore = { store: {}, set: vi.fn(function(this: any, key: string, value: any) { this.store[key] = value; }) };
+    const stored = { version: 0, cloud: { model: 'gemma2-9b-it', fallbackEnabled: true } };
+    
+    const result = normalizeCloudModel(stored, mockStore);
+    
+    expect(result.cloud.model).toBe('openai/gpt-oss-20b');
+  });
+
+  it('should NOT normalize already valid model (openai/gpt-oss-20b)', () => {
+    const mockStore = { store: {}, set: vi.fn(function(this: any, key: string, value: any) { this.store[key] = value; }) };
+    const stored = { version: 1, cloud: { model: 'openai/gpt-oss-20b', fallbackEnabled: true } };
+    
+    const result = normalizeCloudModel(stored, mockStore);
+    
+    expect(result.cloud.model).toBe('openai/gpt-oss-20b');
+    expect(mockStore.set).not.toHaveBeenCalled();
+  });
+
+  it('should NOT normalize already valid model (openai/gpt-oss-120b)', () => {
+    const mockStore = { store: {}, set: vi.fn(function(this: any, key: string, value: any) { this.store[key] = value; }) };
+    const stored = { version: 1, cloud: { model: 'openai/gpt-oss-120b', fallbackEnabled: true } };
+    
+    const result = normalizeCloudModel(stored, mockStore);
+    
+    expect(result.cloud.model).toBe('openai/gpt-oss-120b');
+  });
+
+it('should NOT normalize if cloud.model is missing', () => {
+    const mockStore = { store: {} as any, set: vi.fn(function(this: any, key: string, value: any) { this.store[key] = value; }) };
+    const stored = { version: 1, cloud: { fallbackEnabled: true } };
+    
+    const result = normalizeCloudModel(stored, mockStore);
+    
+    // Shallow merge replaces entire cloud object, so model is undefined
+    // Normalization doesn't trigger because there's no model to check
+    expect(result.cloud.model).toBeUndefined();
+    expect(mockStore.set).not.toHaveBeenCalled();
+  });
+
+  it('should persist corrected model to store immediately', () => {
+    const mockStore = { store: {} as any, set: vi.fn(function(this: any, key: string, value: any) { this.store[key] = value; }) };
+    const stored = { version: 1, cloud: { model: 'llama-3.1-8b-instant', fallbackEnabled: true } };
+    
+    normalizeCloudModel(stored, mockStore);
+    
+    // Verify the store was updated
+    expect(mockStore.store.cloud).toEqual(expect.objectContaining({ model: 'openai/gpt-oss-20b' }));
   });
 });
