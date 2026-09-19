@@ -4,30 +4,25 @@ import {
   CompressionCandidate,
   CompressionTier,
   ProviderType,
-  SafetyScores,
   AnalysisResult,
   TargetModel,
   ProcessingMode,
   VerificationThresholds,
   SecretDetectionResult,
-  PrivacySettings
+  PrivacySettings,
+  TokenTrimError
 } from '@tokentrim/shared';
 import { InputAnalyzer } from '@tokentrim/analyzer';
 import { Tier0Compressor } from '@tokentrim/compressor';
-import { AICompressor, AICompressionOptions } from '@tokentrim/compressor';
-import { VerificationEngine, DEFAULT_THRESHOLDS } from '@tokentrim/verifier';
+import { AICompressor, ForceTargetDiagnostics, ForceTargetAttempt } from '@tokentrim/compressor';
+import { VerificationEngine } from '@tokentrim/verifier';
 import { SecretDetector } from '@tokentrim/privacy';
-import { ProviderFactory, OllamaProvider, GroqProvider, LLMProvider } from '@tokentrim/providers';
+import { ProviderFactory, GroqProvider } from '@tokentrim/providers';
 import { tokenizerRegistry, createTokenizerConfig } from '@tokentrim/tokenizer';
 import { Telemetry } from '@tokentrim/telemetry';
 
 export interface TokenTrimEngineConfig {
   targetModel: TargetModel;
-  ollamaConfig?: {
-    baseUrl: string;
-    model: string;
-    timeoutMs: number;
-  };
   groqConfig?: {
     apiKey: string;
     model: string;
@@ -50,9 +45,12 @@ interface PipelineContext {
   tier0Candidate: CompressionCandidate | null;
   aiCandidates: CompressionCandidate[];
   bestCandidate: CompressionCandidate | null;
+  bestCandidatePassed: boolean;
+  forcedTargetResult?: boolean;
   verificationResult: import('@tokentrim/verifier').VerificationResult | null;
   mode: ProcessingMode;
   startTime: number;
+  cloudError?: Error;
 }
 
 export class TokenTrimEngine {
@@ -62,11 +60,9 @@ export class TokenTrimEngine {
   private verifier: VerificationEngine;
   private privacyDetector: SecretDetector;
   private providerFactory: ProviderFactory;
-  private ollamaProvider: OllamaProvider | null = null;
   private groqProvider: GroqProvider | null = null;
   private telemetry: Telemetry;
   private config: TokenTrimEngineConfig;
-  private currentMode: ProcessingMode = 'local';
 
   constructor(config: TokenTrimEngineConfig) {
     this.config = config;
@@ -76,10 +72,7 @@ export class TokenTrimEngine {
     this.verifier = new VerificationEngine(config.verificationThresholds || {}, config.targetModel);
     this.privacyDetector = new SecretDetector(config.privacySettings || {
       neverSendSecrets: true,
-      allowCloudProcessing: true,
-      requireCloudConfirmation: false,
-      maskSecretsInLogs: true,
-      localOnlyMode: false
+      maskSecretsInLogs: true
     });
     this.providerFactory = new ProviderFactory();
     this.telemetry = new Telemetry(config.enableTelemetry !== false);
@@ -89,11 +82,20 @@ export class TokenTrimEngine {
 
   private initializeProviders(): void {
     const providers = this.providerFactory.createProviders({
-      ollama: this.config.ollamaConfig,
       groq: this.config.groqConfig
     });
-    this.ollamaProvider = providers.ollama || null;
     this.groqProvider = providers.groq || null;
+  }
+
+  /**
+   * Check whether a candidate's reduction ratio falls within the requested target range.
+   */
+  private isInTargetRange(candidate: CompressionCandidate, originalTokens: number, options: CompressionOptions): boolean {
+    if (originalTokens <= 0) return false;
+    const ratio = candidate.grossTokenReduction / originalTokens;
+    const min = options.minimumReductionRatio ?? 0;
+    const max = options.maximumReductionRatio ?? 1;
+    return ratio >= min && ratio <= max;
   }
 
   async compress(text: string, options: CompressionOptions): Promise<CompressionResult> {
@@ -101,14 +103,15 @@ export class TokenTrimEngine {
     const context: PipelineContext = {
       originalText: text,
       options,
-      analysis: null as any,
-      privacyScan: null as any,
+      analysis: null as unknown as AnalysisResult,
+      privacyScan: null as unknown as SecretDetectionResult,
       originalTokens: 0,
       tier0Candidate: null,
       aiCandidates: [],
       bestCandidate: null,
+      bestCandidatePassed: false,
       verificationResult: null,
-      mode: 'local',
+      mode: 'server',
       startTime
     };
 
@@ -117,154 +120,126 @@ export class TokenTrimEngine {
       context.analysis = await this.analyzer.analyze(text);
       context.originalTokens = await this.countTokens(text, options.targetModel);
 
-      // Step 2: Privacy scan
+      // Step 2: Privacy scan (Fail fast if secrets are found)
       context.privacyScan = this.privacyDetector.scan(text);
       
-      // Check if we can use cloud
-      const cloudAllowed = this.shouldAllowCloud(context.privacyScan, options);
-      
-      // When forceCloud is true, skip local compression entirely
-      const skipLocal = options.forceCloud === true;
+      const privacySettings = this.config.privacySettings || { neverSendSecrets: true };
+      if (context.privacyScan.hasSecrets && privacySettings.neverSendSecrets) {
+        throw new TokenTrimError(
+          'Secrets detected in prompt. Compression aborted.',
+          'SECRETS_DETECTED',
+          'privacy',
+          false,
+          { secretTypes: Array.from(new Set(context.privacyScan.secrets.map(s => s.type))) }
+        );
+      }
 
-      // Step 3: Tier 0 deterministic compression (skip if forceCloud)
-      if (!skipLocal) {
-        context.tier0Candidate = await this.tier0Compressor.compress(text, options);
-        
-        // Evaluate Tier 0
-        if (context.tier0Candidate) {
-          const tier0Verified = await this.verifyCandidate(context, context.tier0Candidate);
+      const isForceTargetMode = options.safeResultMode === false;
+
+      // Step 3: Tier 0 deterministic compression (Server-side)
+      context.tier0Candidate = await this.tier0Compressor.compress(text, options);
+      
+      if (context.tier0Candidate) {
+        const tier0Verified = await this.verifyCandidate(context, context.tier0Candidate);
+        if (isForceTargetMode) {
+          if (this.isInTargetRange(context.tier0Candidate, context.originalTokens, options)) {
+            context.bestCandidate = context.tier0Candidate;
+            context.bestCandidatePassed = true;
+            context.forcedTargetResult = !tier0Verified.passed;
+            context.mode = 'server';
+          }
+        } else {
           if (tier0Verified.passed) {
             context.bestCandidate = context.tier0Candidate;
-            context.mode = 'local';
+            context.bestCandidatePassed = true;
+            context.mode = 'server';
           }
         }
       }
 
-      // Step 4: AI Compression (if Tier 0 not sufficient or not accepted) - skip if forceCloud
-      if (!skipLocal) {
-        const shouldTryAI = this.shouldTryAICompression(context, options);
-        
-        if (shouldTryAI && this.ollamaProvider) {
-          context.mode = 'local';
-          try {
-            context.aiCandidates = await this.aiCompressor.generateCandidates(text, {
-              provider: this.ollamaProvider,
-              analysis: context.analysis,
-              targetModel: options.targetModel
-            });
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            console.error('[TokenTrim] Local AI compression (Ollama) failed:', message);
-            context.aiCandidates = [];
-          }
-
-          // Verify AI candidates
-          for (const candidate of context.aiCandidates) {
-            const verified = await this.verifyCandidate(context, candidate);
-            if (verified.passed && this.isBetterCandidate(candidate, context.bestCandidate)) {
-              context.bestCandidate = candidate;
-            }
-          }
-        }
-      }
-
-      // Step 5: Cloud fallback (if enabled and local failed) or forced
-      const shouldTryCloud = (options.forceCloud || (!context.bestCandidate && options.allowCloudFallback)) && cloudAllowed && this.groqProvider;
+      // Step 4: AI Compression with Groq (if Tier 0 not sufficient)
+      const shouldTryCloud = this.shouldTryAICompression(context, options) && this.groqProvider;
       
-      if (shouldTryCloud && !options.forceLocal) {
+      if (shouldTryCloud) {
         context.mode = 'cloud';
         
-        if (options.requireConfirmationForCloud) {
-          // In a real app, this would trigger a UI confirmation
-          // For now, we'll proceed but log the requirement
-          console.log('[TokenTrim] Cloud confirmation required - proceeding for demo');
-        }
-
-        context.aiCandidates = await this.aiCompressor.generateCandidates(text, {
-          provider: this.groqProvider!,
-          analysis: context.analysis,
-          targetModel: options.targetModel
-        });
-
-        let bestCloudCandidate: CompressionCandidate | null = null;
-        
-        for (const candidate of context.aiCandidates) {
-          candidate.tier = 'cloud_ai';
-          candidate.provider = 'groq';
-          const verified = await this.verifyCandidate(context, candidate);
-          if (verified.passed) {
-            // When forceCloud, pick best cloud candidate directly without comparing to local
-            if (options.forceCloud) {
-              if (!bestCloudCandidate || this.isBetterCandidate(candidate, bestCloudCandidate)) {
-                bestCloudCandidate = candidate;
+        try {
+          context.aiCandidates = await this.aiCompressor.generateCandidates(text, {
+            provider: this.groqProvider!,
+            analysis: context.analysis,
+            targetModel: options.targetModel,
+            compressionTarget: options.compressionTarget,
+            targetReductionRatio: options.targetReductionRatio,
+            minimumReductionRatio: options.minimumReductionRatio,
+            maximumReductionRatio: options.maximumReductionRatio,
+            safeResultMode: options.safeResultMode
+          });
+  
+          for (const candidate of context.aiCandidates) {
+            const verified = await this.verifyCandidate(context, candidate);
+            
+            if (isForceTargetMode) {
+              // Force Target Mode: Must be in target range. Verification is NOT a blocker.
+              if (this.isInTargetRange(candidate, context.originalTokens, options)) {
+                if (this.isBetterCandidate(candidate, context.bestCandidate, context.originalTokens, options)) {
+                  context.bestCandidate = candidate;
+                  context.bestCandidatePassed = true;
+                  context.forcedTargetResult = !verified.passed;
+                }
               }
-            } else if (this.isBetterCandidate(candidate, context.bestCandidate)) {
-              context.bestCandidate = candidate;
+            } else {
+              // Safe Result Mode: MUST pass verification to be accepted (even if it's a fallback)
+              if (verified.passed) {
+                if (this.isBetterCandidate(candidate, context.bestCandidate, context.originalTokens, options)) {
+                  context.bestCandidate = candidate;
+                  context.bestCandidatePassed = true;
+                }
+              }
             }
           }
-        }
-        
-        // If forceCloud and we have a valid cloud candidate, use it
-        if (options.forceCloud && bestCloudCandidate) {
-          context.bestCandidate = bestCloudCandidate;
+        } catch (error) {
+          console.error('[TokenTrim] Cloud AI compression (Groq) failed:', error);
+          if (error instanceof Error) {
+            context.cloudError = error;
+          }
+          // Non-fatal, we can still fall back to Tier 0 if it was successful
         }
       }
 
-      // Step 6: Final acceptance check
-      const finalResult = this.buildResult(context, startTime);
+      // Step 5: Final acceptance check
+      const finalResult = await this.buildResult(context, startTime);
       
       // Record telemetry
       this.telemetry.recordCompression(finalResult);
 
       return finalResult;
     } catch (error) {
+      if (error instanceof TokenTrimError) {
+        throw error;
+      }
       console.error('[TokenTrim] Compression error:', error);
-      // Return original text on any error
       return this.buildErrorResult(text, context.originalTokens, options, startTime, error);
     }
   }
 
-  private shouldAllowCloud(privacyScan: SecretDetectionResult, options: CompressionOptions): boolean {
-    const privacySettings = this.config.privacySettings || {
-      neverSendSecrets: true,
-      allowCloudProcessing: true,
-      requireCloudConfirmation: false,
-      maskSecretsInLogs: true,
-      localOnlyMode: false
-    };
-
-    if (privacySettings.localOnlyMode) return false;
-    if (!options.allowCloudFallback && !options.forceCloud) return false;
-    if (privacyScan.hasSecrets && privacySettings.neverSendSecrets) return false;
-    if (!privacySettings.allowCloudProcessing) return false;
-    
-    return true;
-  }
-
   private shouldTryAICompression(context: PipelineContext, options: CompressionOptions): boolean {
-    // Don't use AI for very short prompts
     if (context.originalTokens < 20) return false;
     
-    // Don't use AI if Tier 0 already achieved good compression with high confidence
     if (context.tier0Candidate) {
       const tier0Ratio = context.tier0Candidate.grossTokenReduction / context.originalTokens;
-      // For conservative, accept lower ratio since target is 10-20%
-      // For balanced/aggressive, require higher ratio
-      const minRatio = options.maxCompressionRatio ? options.maxCompressionRatio * 0.5 : 0.15;
-      if (tier0Ratio > minRatio && context.tier0Candidate.safetyScores.overall > 0.9) {
-        return false; // Tier 0 is good enough
+      const minimumRatio = options.minimumReductionRatio
+        ?? (options.maxCompressionRatio ? options.maxCompressionRatio * 0.5 : 0.15);
+      const maximumRatio = options.maximumReductionRatio ?? 1;
+      const isWithinRequestedRange = tier0Ratio >= minimumRatio && tier0Ratio <= maximumRatio;
+      if (isWithinRequestedRange && context.tier0Candidate.safetyScores.overall > 0.9) {
+        return false;
       }
     }
     
-    // Use AI for complex prompts
     if (context.analysis.complexity === 'high') return true;
     if (context.analysis.contentType === 'coding_prompt') return true;
     if (context.analysis.hasCodeBlocks) return true;
     
-    // For all compression targets, try AI if Tier 0 wasn't sufficient
-    // Conservative: target 10-20%, so try AI if Tier 0 got < 10%
-    // Balanced: target 20-35%, so try AI if Tier 0 got < 15%
-    // Aggressive: target 35-50%, so try AI if Tier 0 got < 20%
     return true;
   }
 
@@ -275,7 +250,8 @@ export class TokenTrimEngine {
     const result = await this.verifier.verify(
       context.originalText,
       candidate.compressedText,
-      candidate.safetyScores
+      candidate.safetyScores,
+      context.options.verificationThresholds
     );
     
     context.verificationResult = result;
@@ -284,69 +260,185 @@ export class TokenTrimEngine {
 
   private isBetterCandidate(
     candidate: CompressionCandidate,
-    currentBest: CompressionCandidate | null
+    currentBest: CompressionCandidate | null,
+    originalTokens: number,
+    options: CompressionOptions
   ): boolean {
     if (!currentBest) return true;
+
+    const targetRatio = options.targetReductionRatio;
+    const isForceTargetMode = options.safeResultMode === false;
     
-    // Prefer higher net savings
-    if (candidate.netTokenSavings !== currentBest.netTokenSavings) {
-      return candidate.netTokenSavings > currentBest.netTokenSavings;
+    if (targetRatio !== undefined && originalTokens > 0) {
+      const candidateRatio = candidate.grossTokenReduction / originalTokens;
+      const currentBestRatio = currentBest.grossTokenReduction / originalTokens;
+      const candidateDistance = Math.abs(candidateRatio - targetRatio);
+      const currentBestDistance = Math.abs(currentBestRatio - targetRatio);
+
+      if (isForceTargetMode) {
+        // Rank by closeness to target in Force Target Mode
+        if (Math.abs(candidateDistance - currentBestDistance) > 0.005) {
+          return candidateDistance < currentBestDistance;
+        }
+      } else {
+        const minimumRatio = options.minimumReductionRatio ?? 0;
+        const maximumRatio = options.maximumReductionRatio ?? 1;
+        const candidateIsInRange = candidateRatio >= minimumRatio && candidateRatio <= maximumRatio;
+        const currentBestIsInRange = currentBestRatio >= minimumRatio && currentBestRatio <= maximumRatio;
+
+        // A verified candidate that fulfils the chosen preset takes precedence.
+        if (candidateIsInRange !== currentBestIsInRange) {
+          return candidateIsInRange;
+        }
+
+        // Within (or outside) the range, select the result closest to the requested reduction.
+        if (Math.abs(candidateDistance - currentBestDistance) > 0.005) {
+          return candidateDistance < currentBestDistance;
+        }
+      }
     }
     
-    // Prefer higher safety score
     if (candidate.safetyScores.overall !== currentBest.safetyScores.overall) {
       return candidate.safetyScores.overall > currentBest.safetyScores.overall;
     }
     
-    // Prefer local over cloud
+    if (candidate.grossTokenReduction !== currentBest.grossTokenReduction) {
+      return candidate.grossTokenReduction > currentBest.grossTokenReduction;
+    }
+
+    if (candidate.netTokenSavings !== currentBest.netTokenSavings) {
+      return candidate.netTokenSavings > currentBest.netTokenSavings;
+    }
+    
     if (candidate.tier !== currentBest.tier) {
-      const tierOrder: Record<CompressionTier, number> = { tier0: 3, local_ai: 2, cloud_ai: 1 };
+      const tierOrder: Record<CompressionTier, number> = { tier0: 2, cloud_ai: 1, deterministic: 2 };
       return tierOrder[candidate.tier] > tierOrder[currentBest.tier];
     }
     
     return false;
   }
 
-  private buildResult(context: PipelineContext, startTime: number): CompressionResult {
+  private async buildResult(context: PipelineContext, startTime: number): Promise<CompressionResult> {
     const processingTimeMs = Date.now() - startTime;
+    const isForceTargetMode = context.options.safeResultMode === false;
+    
+    // Extract Force Target diagnostics from candidates
+    const forceTargetDiagnostics = this.extractForceTargetDiagnostics(context.aiCandidates);
     
     if (!context.bestCandidate) {
       const noCandidatesGenerated = context.aiCandidates.length === 0 && !context.tier0Candidate;
+      
+      if (isForceTargetMode) {
+        const targetPercent = (context.options.targetReductionRatio ?? 0.5) * 100;
+        const minPercent = (context.options.minimumReductionRatio ?? 0) * 100;
+        const maxPercent = (context.options.maximumReductionRatio ?? 1) * 100;
+        
+        // Check if we have a provider error
+        if (context.cloudError) {
+          return this.buildProviderErrorResult(context, targetPercent, minPercent, maxPercent, processingTimeMs);
+        }
+        
+        // Build detailed rejection reason with diagnostics
+        let rejectionReason = this.buildForceTargetRejectionReason(
+          targetPercent,
+          minPercent,
+          maxPercent,
+          forceTargetDiagnostics,
+          context.aiCandidates.length,
+          noCandidatesGenerated
+        );
+        
+        return {
+          originalText: context.originalText,
+          bestCandidate: null,
+          allCandidates: [context.tier0Candidate, ...context.aiCandidates].filter(Boolean) as CompressionCandidate[],
+          accepted: false,
+          rejectionReason,
+          processingTimeMs,
+          originalTokens: context.originalTokens,
+          finalTokens: context.originalTokens,
+          grossReduction: 0,
+          compressionOverhead: 0,
+          netSavings: 0,
+          provider: 'deterministic',
+          mode: context.mode
+        };
+      }
+
+      let rejectionReason = 'No candidate passed verification';
+      if (context.verificationResult && !context.verificationResult.passed) {
+        const failedDetail = context.verificationResult.details.find(d => !d.passed);
+        if (failedDetail) {
+          rejectionReason = failedDetail.message;
+        }
+      } else if (context.cloudError) {
+        rejectionReason = this.sanitizeProviderError(context.cloudError);
+      } else if (noCandidatesGenerated) {
+        rejectionReason = 'No compressible patterns found';
+      }
+
       return {
         originalText: context.originalText,
         bestCandidate: null,
         allCandidates: [context.tier0Candidate, ...context.aiCandidates].filter(Boolean) as CompressionCandidate[],
         accepted: false,
-        rejectionReason: noCandidatesGenerated ? 'No compressible patterns found' : 'No candidate passed verification',
+        rejectionReason,
         processingTimeMs,
         originalTokens: context.originalTokens,
         finalTokens: context.originalTokens,
         grossReduction: 0,
         compressionOverhead: 0,
         netSavings: 0,
-        estimatedCostSavings: 0,
         provider: 'deterministic',
         mode: context.mode
       };
     }
 
-    const finalTokens = context.originalTokens - context.bestCandidate.grossTokenReduction;
-    const estimatedCostSavings = this.estimateCostSavings(context.bestCandidate);
+    // Re-count tokens on the actual compressed text for accuracy
+    const actualCompressedTokens = await this.countTokens(
+      context.bestCandidate.compressedText,
+      context.options.targetModel
+    );
+    const actualGrossReduction = context.originalTokens - actualCompressedTokens;
+    const finalTokens = actualCompressedTokens;
+
+    // In Force Target Mode, candidate selection already guarantees the target
+    // range. Verification failures are warnings, rather than rejection reasons.
+    const isAccepted = context.bestCandidatePassed;
+
+    // In Safe Result Mode, a verified candidate outside the target range is a safe fallback.
+    // In Force Target Mode this cannot happen (out-of-range candidates are filtered earlier).
+
+    let rejectionReason: string | undefined;
+    if (!isAccepted) {
+      if (isForceTargetMode) {
+        const targetPercent = (context.options.targetReductionRatio ?? 0.5) * 100;
+        rejectionReason = `Unable to meet the ${Math.round(targetPercent)}% reduction target within the accepted range.`;
+      } else if (context.verificationResult && !context.verificationResult.passed) {
+        const firstFailure = context.verificationResult.details[0];
+        rejectionReason = firstFailure?.message ?? 'No candidate passed verification';
+      } else if (context.cloudError) {
+        rejectionReason = context.cloudError.message;
+      } else {
+        rejectionReason = 'No candidate passed verification';
+      }
+    }
 
     return {
       originalText: context.originalText,
       bestCandidate: context.bestCandidate,
       allCandidates: [context.tier0Candidate, ...context.aiCandidates].filter(Boolean) as CompressionCandidate[],
-      accepted: true,
+      accepted: isAccepted,
+      rejectionReason,
       processingTimeMs,
       originalTokens: context.originalTokens,
       finalTokens,
-      grossReduction: context.bestCandidate.grossTokenReduction,
+      grossReduction: actualGrossReduction,
       compressionOverhead: context.bestCandidate.compressionOverhead,
-      netSavings: context.bestCandidate.netTokenSavings,
-      estimatedCostSavings,
+      netSavings: actualGrossReduction - context.bestCandidate.compressionOverhead,
       provider: context.bestCandidate.provider,
-      mode: context.mode
+      mode: context.mode,
+      forcedTargetResult: context.forcedTargetResult
     };
   }
 
@@ -357,41 +449,38 @@ export class TokenTrimEngine {
     startTime: number,
     error: unknown
   ): CompressionResult {
+    let rejectionReason = 'Unknown error';
+    if (error instanceof TokenTrimError) {
+      rejectionReason = error.message;
+    } else if (error instanceof Error) {
+      rejectionReason = error.message;
+    }
+
     return {
       originalText: text,
       bestCandidate: null,
       allCandidates: [],
       accepted: false,
-      rejectionReason: error instanceof Error ? error.message : 'Unknown error',
+      rejectionReason,
       processingTimeMs: Date.now() - startTime,
       originalTokens,
       finalTokens: originalTokens,
       grossReduction: 0,
       compressionOverhead: 0,
       netSavings: 0,
-      estimatedCostSavings: 0,
       provider: 'deterministic',
-      mode: 'local'
+      mode: 'server'
     };
   }
 
-  private estimateCostSavings(candidate: CompressionCandidate): number {
-    // Rough estimate: $0.002 per 1K tokens for typical API pricing
-    return (candidate.netTokenSavings / 1000) * 0.002;
-  }
 
-  private async countTokens(text: string, model: TargetModel): Promise<number> {
+  async countTokens(text: string, model: TargetModel): Promise<number> {
     const result = await tokenizerRegistry.countTokens(text, createTokenizerConfig(model));
     return result.tokens;
   }
 
-  // Public API methods
   async healthCheck(): Promise<Record<string, import('@tokentrim/providers').ProviderHealth>> {
     const results: Record<string, import('@tokentrim/providers').ProviderHealth> = {};
-    
-    if (this.ollamaProvider) {
-      results['ollama'] = await this.ollamaProvider.healthCheck();
-    }
     
     if (this.groqProvider) {
       results['groq'] = await this.groqProvider.healthCheck();
@@ -402,17 +491,12 @@ export class TokenTrimEngine {
 
   getAvailableProviders(): ProviderType[] {
     const providers: ProviderType[] = ['deterministic'];
-    if (this.ollamaProvider) providers.push('ollama');
     if (this.groqProvider) providers.push('groq');
     return providers;
   }
 
   updateConfig(config: Partial<TokenTrimEngineConfig>): void {
     this.config = { ...this.config, ...config };
-    
-    if (config.ollamaConfig && this.ollamaProvider) {
-      this.ollamaProvider.updateConfig(config.ollamaConfig);
-    }
     
     if (config.groqConfig && this.groqProvider) {
       this.groqProvider.updateConfig(config.groqConfig);
@@ -429,5 +513,94 @@ export class TokenTrimEngine {
 
   getTelemetry(): Telemetry {
     return this.telemetry;
+  }
+
+  private extractForceTargetDiagnostics(candidates: CompressionCandidate[]): ForceTargetDiagnostics | null {
+    for (const candidate of candidates) {
+      const metadata = candidate.metadata ?? {};
+      const diagnostics = metadata['forceTargetDiagnostics'] as ForceTargetDiagnostics | undefined;
+      if (diagnostics) {
+        return diagnostics;
+      }
+    }
+    return null;
+  }
+
+  private buildProviderErrorResult(
+    context: PipelineContext,
+    targetPercent: number,
+    minPercent: number,
+    maxPercent: number,
+    processingTimeMs: number
+  ): CompressionResult {
+    const provider = context.options.targetModel;
+    const errorMessage = context.cloudError?.message ?? 'Unknown provider error';
+    const sanitizedError = this.sanitizeProviderError(context.cloudError);
+    
+    return {
+      originalText: context.originalText,
+      bestCandidate: null,
+      allCandidates: [context.tier0Candidate, ...context.aiCandidates].filter(Boolean) as CompressionCandidate[],
+      accepted: false,
+      rejectionReason: `Provider error (${provider}): ${sanitizedError}. Target was ${targetPercent}% reduction (${minPercent}-${maxPercent}% range).`,
+      processingTimeMs,
+      originalTokens: context.originalTokens,
+      finalTokens: context.originalTokens,
+      grossReduction: 0,
+      compressionOverhead: 0,
+      netSavings: 0,
+      provider: 'deterministic',
+      mode: context.mode
+    };
+  }
+
+  private sanitizeProviderError(error: Error | undefined): string {
+    if (!error) return 'Unknown provider error';
+    const message = error.message;
+    // Sanitize common sensitive patterns
+    return message
+      .replace(/Bearer\s+[a-zA-Z0-9-_]+/gi, 'Bearer [REDACTED]')
+      .replace(/api[_-]?key["\s:=]+[a-zA-Z0-9-_]+/gi, 'api_key=[REDACTED]')
+      .replace(/secret["\s:=]+[a-zA-Z0-9-_]+/gi, 'secret=[REDACTED]')
+      .replace(/token["\s:=]+[a-zA-Z0-9-_]+/gi, 'token=[REDACTED]');
+  }
+
+  private buildForceTargetRejectionReason(
+    targetPercent: number,
+    minPercent: number,
+    maxPercent: number,
+    diagnostics: ForceTargetDiagnostics | null,
+    candidateCount: number,
+    noCandidatesGenerated: boolean
+  ): string {
+    if (noCandidatesGenerated) {
+      return `Unable to meet the ${Math.round(targetPercent)}% reduction target (${Math.round(minPercent)}-${Math.round(maxPercent)}% range). No candidates were generated.`;
+    }
+
+    if (!diagnostics) {
+      return `Unable to meet the ${Math.round(targetPercent)}% reduction target (${Math.round(minPercent)}-${Math.round(maxPercent)}% range). Generated ${candidateCount} candidate(s) but none met the target range.`;
+    }
+
+    const { attempts, closestAttempt, finalStatus } = diagnostics;
+    const totalAttempts = attempts.length;
+
+    if (finalStatus === 'provider_failure') {
+      const providerErrors = attempts.filter(a => a.status === 'provider_error');
+      return `Provider failure after ${totalAttempts} attempt(s). Target: ${Math.round(targetPercent)}% (${Math.round(minPercent)}-${Math.round(maxPercent)}% range).`;
+    }
+
+    if (finalStatus === 'impossible_target') {
+      return `Target impossible due to token granularity. Original: ${diagnostics.originalTokens} tokens. Required range: ${diagnostics.minOutputTokens}-${diagnostics.maxOutputTokens} output tokens.`;
+    }
+
+    if (closestAttempt) {
+      const achievedPercent = Math.round(closestAttempt.reductionRatio * 100);
+      const status = closestAttempt.status;
+      const statusText = status === 'under_compressed' ? 'under-compressed' : status === 'over_compressed' ? 'over-compressed' : 'out of range';
+      
+      return `Generated ${totalAttempts} candidate(s); closest achieved ${achievedPercent}% reduction (${statusText}). Target requires ${Math.round(minPercent)}-${Math.round(maxPercent)}% reduction.`;
+    }
+
+    return `Unable to meet the ${Math.round(targetPercent)}% reduction target (${Math.round(minPercent)}-${Math.round(maxPercent)}% range). Generated ${totalAttempts} candidate(s); none met target.`;
   }
 }
