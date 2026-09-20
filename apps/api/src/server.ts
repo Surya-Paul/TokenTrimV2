@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import sensible from '@fastify/sensible';
 import { TokenTrimEngine } from '@tokentrim/core';
-import { config, bodySizeBytes } from './config';
+import { getBodySizeBytes, getConfig } from './config';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -16,30 +16,43 @@ import compressionRoutes from './routes/compression';
 import privacyRoutes from './routes/privacy';
 import healthRoutes from './routes/health';
 
-// Initialize core engine
-export const engine = new TokenTrimEngine({
-  targetModel: config.TARGET_MODEL,
-  groqConfig: {
-    apiKey: config.GROQ_API_KEY,
-    model: config.GROQ_MODEL,
-    timeoutMs: 8000,
-    maxRetries: 1,
-    retryDelayMs: 1000
-  },
-  privacySettings: {
-    neverSendSecrets: true,
-    maskSecretsInLogs: true
-  },
-  enableTelemetry: true
-});
+let defaultEngine: TokenTrimEngine | null = null;
+
+function createDefaultEngine(): TokenTrimEngine {
+  const config = getConfig();
+  return new TokenTrimEngine({
+    targetModel: config.TARGET_MODEL,
+    groqConfig: config.GROQ_API_KEY ? {
+      apiKey: config.GROQ_API_KEY,
+      model: config.GROQ_MODEL,
+      timeoutMs: 8000,
+      maxRetries: 1,
+      retryDelayMs: 1000
+    } : undefined,
+    privacySettings: {
+      neverSendSecrets: true,
+      maskSecretsInLogs: true
+    },
+    enableTelemetry: true
+  });
+}
+
+export function getDefaultEngine(): TokenTrimEngine {
+  if (!defaultEngine) {
+    defaultEngine = createDefaultEngine();
+  }
+  return defaultEngine;
+}
 
 export async function buildServer(injectedEngine?: TokenTrimEngine) {
+  const config = getConfig();
+  const engine = injectedEngine || getDefaultEngine();
   const fastify = Fastify({
     logger: {
       level: config.LOG_LEVEL,
       redact: ['req.headers.authorization', 'req.body.text'] // Never log prompt text
     },
-    bodyLimit: bodySizeBytes,
+    bodyLimit: getBodySizeBytes(),
   });
 
   // Auth Hook
@@ -84,25 +97,26 @@ export async function buildServer(injectedEngine?: TokenTrimEngine) {
   });
 
   // Global Error Handler
-  fastify.setErrorHandler(function (error, request, reply) {
+  fastify.setErrorHandler(function (error: unknown, request, reply) {
     // Fastify HTTP errors (rate limits, bad requests, sensible)
-    if (error.statusCode) {
+    if (error && typeof error === 'object' && 'statusCode' in error) {
       const codeMap: Record<number, string> = {
         429: 'RATE_LIMITED',
         408: 'TIMEOUT',
         503: 'PROVIDER_UNAVAILABLE',
         504: 'GATEWAY_TIMEOUT'
       };
+      const err = error as { statusCode: number; name?: string; message?: string };
       
-      reply.status(error.statusCode).send({
-        code: codeMap[error.statusCode] || error.name || 'HTTP_ERROR',
-        message: error.message
+      reply.status(err.statusCode).send({
+        code: codeMap[err.statusCode] || err.name || 'HTTP_ERROR',
+        message: err.message
       });
       return;
     }
 
     // Zod validation errors
-    if (error.name === 'ZodError') {
+    if (error && typeof error === 'object' && 'name' in error && (error as { name: string }).name === 'ZodError') {
       reply.status(400).send({
         code: 'VALIDATION_ERROR',
         message: 'Invalid request payload',
@@ -112,7 +126,7 @@ export async function buildServer(injectedEngine?: TokenTrimEngine) {
     }
     
     // Custom TokenTrim errors
-    if (error.name === 'TokenTrimError') {
+    if (error && typeof error === 'object' && 'name' in error && (error as { name: string }).name === 'TokenTrimError') {
       const trimError = error as Error & { code?: string; metadata?: unknown };
       const code = trimError.code || 'INTERNAL_ERROR';
       const statusCode = code === 'SECRETS_DETECTED' ? 422 : 500;
@@ -143,6 +157,7 @@ export async function buildServer(injectedEngine?: TokenTrimEngine) {
 
 // Start server if this is the main module
 if (require.main === module) {
+  const config = getConfig();
   buildServer().then(server => {
     server.listen({ port: config.PORT, host: config.HOST }, (err, address) => {
       if (err) {

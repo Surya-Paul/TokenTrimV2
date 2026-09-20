@@ -318,27 +318,60 @@ export class AICompressor {
     let previousReductionRatio: number | null = null;
 
     for (let attempt = 1; attempt <= this.MAX_FORCE_TARGET_ATTEMPTS; attempt++) {
-      const candidate = await this.generateSingleCandidate(
-        text,
-        analysis,
-        provider,
-        level,
-        targetModel,
-        {
-          targetReductionRatio,
-          minimumReductionRatio,
-          maximumReductionRatio,
-          safeResultMode: false
-        },
-        attempt,
-        targetOutputTokens,
-        minOutputTokens,
-        maxOutputTokens,
-        true,
-        previousOutputTokens,
-        previousReductionRatio,
-        signal
-      );
+      let candidate: CompressionCandidate | null = null;
+      let attemptError: Error | null = null;
+
+      try {
+        candidate = await this.generateSingleCandidate(
+          text,
+          analysis,
+          provider,
+          level,
+          targetModel,
+          {
+            targetReductionRatio,
+            minimumReductionRatio,
+            maximumReductionRatio,
+            safeResultMode: false
+          },
+          attempt,
+          targetOutputTokens,
+          minOutputTokens,
+          maxOutputTokens,
+          true,
+          previousOutputTokens,
+          previousReductionRatio,
+          signal
+        );
+      } catch (error) {
+        attemptError = error instanceof Error ? error : new Error(String(error));
+
+        // Check for unrecoverable errors that should abort immediately
+        const errorMessage = attemptError.message.toLowerCase();
+        const isUnrecoverable = errorMessage.includes('invalid api key') ||
+          errorMessage.includes('unauthorized') ||
+          errorMessage.includes('401') ||
+          errorMessage.includes('api key') && errorMessage.includes('invalid');
+
+        if (isUnrecoverable) {
+          throw attemptError;
+        }
+
+        // Record provider error and continue to next attempt
+        const providerErrorRecord: ForceTargetAttempt = {
+          attemptNumber: attempt,
+          level,
+          outputTokens: 0,
+          reductionRatio: 0,
+          status: 'provider_error',
+          minOutputTokens,
+          maxOutputTokens,
+          targetOutputTokens,
+          errorMessage: attemptError.message
+        };
+        diagnostics.attempts.push(providerErrorRecord);
+        continue;
+      }
 
       if (!candidate) {
         const attemptRecord: ForceTargetAttempt = {

@@ -34,7 +34,7 @@ function parseByteSize(value: string): number {
 
 const EnvSchema = z.object({
   // Groq Config
-  GROQ_API_KEY: z.string().min(1, 'GROQ_API_KEY is required'),
+  GROQ_API_KEY: z.string().min(1, 'GROQ_API_KEY is required').optional(),
   GROQ_MODEL: z.string().default('qwen/qwen3.8-27b'),
   
   // Server Config
@@ -54,10 +54,27 @@ const EnvSchema = z.object({
   API_AUTH_TOKEN: z.string().optional(),
 });
 
-// Validate and export config
-const envConfig = EnvSchema.parse(process.env);
+let cachedConfig: z.infer<typeof EnvSchema> | null = null;
 
-/** Parsed REQUEST_SIZE_LIMIT in bytes, validated at startup. */
-export const bodySizeBytes = parseByteSize(envConfig.REQUEST_SIZE_LIMIT);
+/**
+ * Get validated config, lazily evaluating on first call.
+ * Throws if GROQ_API_KEY is missing when required (production).
+ */
+export function getConfig(): z.infer<typeof EnvSchema> {
+  if (cachedConfig) return cachedConfig;
+  
+  const envConfig = EnvSchema.parse(process.env);
+  
+  // In production, require GROQ_API_KEY
+  if (envConfig.NODE_ENV === 'production' && !envConfig.GROQ_API_KEY) {
+    throw new Error('GROQ_API_KEY is required in production');
+  }
+  
+  cachedConfig = envConfig;
+  return cachedConfig;
+}
 
-export const config = envConfig;
+/** Parsed REQUEST_SIZE_LIMIT in bytes, validated on first call. */
+export function getBodySizeBytes(): number {
+  return parseByteSize(getConfig().REQUEST_SIZE_LIMIT);
+}

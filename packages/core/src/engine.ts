@@ -37,6 +37,7 @@ export interface TokenTrimEngineConfig {
 }
 
 const OVERALL_DEADLINE_MS = 25000;
+const FORCE_TARGET_DEADLINE_MS = 120000;
 
 interface PipelineContext {
   originalText: string;
@@ -117,8 +118,12 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
       startTime
     };
 
+    // Determine mode early to pick correct deadline
+    const isForceTargetMode = options.safeResultMode === false;
+    const deadlineMs = isForceTargetMode ? FORCE_TARGET_DEADLINE_MS : OVERALL_DEADLINE_MS;
+
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), OVERALL_DEADLINE_MS);
+    const timeoutId = setTimeout(() => controller.abort(), deadlineMs);
 
     const runPipeline = async (signal: AbortSignal): Promise<CompressionResult> => {
       // Step 1: Analyze input
@@ -138,8 +143,6 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
           { secretTypes: Array.from(new Set(context.privacyScan.secrets.map(s => s.type))) }
         );
       }
-
-      const isForceTargetMode = options.safeResultMode === false;
 
       // Step 3: Tier 0 deterministic compression (Server-side)
       context.tier0Candidate = await this.tier0Compressor.compress(text, options);
@@ -589,7 +592,7 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
     maxPercent: number,
     processingTimeMs: number
   ): CompressionResult {
-    const provider = context.options.targetModel;
+    const provider = this.groqProvider ? 'groq' : 'deterministic';
     const errorMessage = context.cloudError?.message ?? 'Unknown provider error';
     const sanitizedError = this.sanitizeProviderError(context.cloudError);
     
@@ -598,7 +601,7 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
       bestCandidate: null,
       allCandidates: [context.tier0Candidate, ...context.aiCandidates].filter(Boolean) as CompressionCandidate[],
       accepted: false,
-      rejectionReason: `Provider error (${provider}): ${sanitizedError}. Target was ${targetPercent}% reduction (${minPercent}-${maxPercent}% range).`,
+      rejectionReason: `Provider error (${provider}): ${sanitizedError}. Target was ${Math.round(targetPercent)}% reduction (${Math.round(minPercent)}-${Math.round(maxPercent)}% range).`,
       processingTimeMs,
       originalTokens: context.originalTokens,
       finalTokens: context.originalTokens,
