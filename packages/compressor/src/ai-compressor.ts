@@ -121,6 +121,7 @@ export interface AICompressionOptions {
   minimumReductionRatio?: number;
   maximumReductionRatio?: number;
   safeResultMode?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface ForceTargetAttempt {
@@ -162,7 +163,7 @@ export class AICompressor {
     text: string,
     options: AICompressionOptions
   ): Promise<CompressionCandidate[]> {
-    const { provider, analysis, targetModel } = options;
+    const { provider, analysis, targetModel, signal } = options;
     const levels = options.levels ?? this.getLevelsForTarget(options.compressionTarget);
     const candidates: CompressionCandidate[] = [];
 
@@ -176,7 +177,8 @@ export class AICompressor {
           provider,
           level,
           targetModel,
-          options
+          options,
+          signal
         );
         candidates.push(...levelCandidates);
       } catch (error) {
@@ -200,7 +202,8 @@ export class AICompressor {
     provider: LLMProvider,
     level: CompressionLevel,
     targetModel: TargetModel,
-    targetOptions: Pick<AICompressionOptions, 'targetReductionRatio' | 'minimumReductionRatio' | 'maximumReductionRatio' | 'safeResultMode'>
+    targetOptions: Pick<AICompressionOptions, 'targetReductionRatio' | 'minimumReductionRatio' | 'maximumReductionRatio' | 'safeResultMode' | 'signal'>,
+    signal?: AbortSignal
   ): Promise<CompressionCandidate[]> {
     const originalTokens = await this.countTokens(text, targetModel);
     const targetReductionRatio = this.clampRatio(targetOptions.targetReductionRatio ?? this.defaultTargetForLevel(level));
@@ -307,7 +310,8 @@ export class AICompressor {
     targetOutputTokens: number,
     minOutputTokens: number,
     maxOutputTokens: number,
-    diagnostics: ForceTargetDiagnostics
+    diagnostics: ForceTargetDiagnostics,
+    signal?: AbortSignal
   ): Promise<{ candidates: CompressionCandidate[]; diagnostics: ForceTargetDiagnostics }> {
     const candidates: CompressionCandidate[] = [];
     let previousOutputTokens: number | null = null;
@@ -332,7 +336,8 @@ export class AICompressor {
         maxOutputTokens,
         true,
         previousOutputTokens,
-        previousReductionRatio
+        previousReductionRatio,
+        signal
       );
 
       if (!candidate) {
@@ -486,7 +491,8 @@ export class AICompressor {
     maxOutputTokens: number,
     isForceTarget: boolean,
     previousOutputTokens: number | null = null,
-    previousReductionRatio: number | null = null
+    previousReductionRatio: number | null = null,
+    signal?: AbortSignal
   ): Promise<CompressionCandidate | null> {
     const originalTokens = await this.countTokens(text, targetModel);
     const targetReductionRatio = this.clampRatio(targetOptions.targetReductionRatio ?? this.defaultTargetForLevel(level));
@@ -549,7 +555,13 @@ export class AICompressor {
       systemPrompt,
       temperature: level === 'extreme' ? 0.3 : level === 'aggressive' ? 0.2 : 0.1,
       maxTokens,
-      stopSequences: ['\n\nPROMPT:', '\n\nCOMPRESSED:']
+      stopSequences: ['\n\nPROMPT:', '\n\nCOMPRESSED:'],
+      signal,
+      metadata: {
+        level,
+        attempt: retryCount,
+        candidateIndex: isForceTarget ? retryCount : 0
+      }
     };
 
     const startTime = Date.now();

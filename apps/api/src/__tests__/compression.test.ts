@@ -5,7 +5,7 @@ import type { TokenTrimEngine } from '@tokentrim/core';
 
 describe('Compression API', () => {
   let server: FastifyInstance;
-  let compressSpy: ReturnType<typeof vi.fn>;
+  let compressSpy: any;
 
   beforeEach(async () => {
     compressSpy = vi.fn(async (text: string) => {
@@ -42,7 +42,8 @@ describe('Compression API', () => {
 
     const mockEngine = {
       compress: compressSpy,
-      countTokens: countTokensSpy
+      countTokens: countTokensSpy,
+      initialize: vi.fn().mockResolvedValue(undefined)
     } as unknown as TokenTrimEngine;
 
     server = await buildServer(mockEngine);

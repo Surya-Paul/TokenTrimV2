@@ -22,8 +22,8 @@ export const engine = new TokenTrimEngine({
   groqConfig: {
     apiKey: config.GROQ_API_KEY,
     model: config.GROQ_MODEL,
-    timeoutMs: config.REQUEST_TIMEOUT_MS,
-    maxRetries: 3,
+    timeoutMs: 8000,
+    maxRetries: 1,
     retryDelayMs: 1000
   },
   privacySettings: {
@@ -66,6 +66,9 @@ export async function buildServer(injectedEngine?: TokenTrimEngine) {
 
   // Inject Engine
   fastify.decorate('engine', injectedEngine || engine);
+
+  // Initialize engine (validates Groq model at startup)
+  await (injectedEngine || engine).initialize();
 
   // Plugins
   await fastify.register(sensible);

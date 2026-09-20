@@ -124,13 +124,31 @@ export class GroqProvider extends BaseProvider {
       response_format: options.responseFormat === 'json' ? { type: 'json_object' } : undefined
     };
 
+    // Use external signal if provided (for overall deadline), otherwise create local one
+    const controller = options.signal 
+      ? new AbortController()
+      : null;
+    
+    // If external signal provided, listen for it
+    if (options.signal) {
+      options.signal.addEventListener('abort', () => controller!.abort());
+    }
+    
+    // Local timeout controller for per-request timeout
+    const timeoutController = new AbortController();
+    const timeoutId = setTimeout(() => timeoutController.abort(), this.config.timeoutMs);
+    
+    // Combine signals - abort if either fires
+    const combinedSignal = AbortSignal.any([
+      controller?.signal || AbortSignal.abort(),
+      timeoutController.signal
+    ]);
+
     let lastError: Error | null = null;
     
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
+      console.log(`[Groq] START attempt=${attempt + 1}/${this.config.maxRetries + 1} model=${this.config.model} level=${options.metadata?.['level'] ?? 'unknown'} candidate=${options.metadata?.['candidateIndex'] ?? 'unknown'}`);
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
-
         const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
@@ -138,7 +156,7 @@ export class GroqProvider extends BaseProvider {
             'Authorization': `Bearer ${this.config.apiKey}`
           },
           body: JSON.stringify(requestBody),
-          signal: controller.signal
+          signal: combinedSignal
         });
 
         clearTimeout(timeoutId);

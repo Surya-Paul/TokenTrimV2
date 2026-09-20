@@ -278,6 +278,8 @@ export interface GenerateOptions {
   maxTokens?: number;
   stopSequences?: string[];
   responseFormat?: 'text' | 'json';
+  signal?: AbortSignal;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ProviderResponse {

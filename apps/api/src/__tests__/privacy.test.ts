@@ -1,12 +1,15 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { buildServer } from '../server';
 import type { FastifyInstance } from 'fastify';
+import type { TokenTrimEngine } from '@tokentrim/core';
 
 describe('Privacy API', () => {
   let server: FastifyInstance;
 
   beforeEach(async () => {
-    const mockEngine = {} as unknown as import('@tokentrim/core').TokenTrimEngine;
+    const mockEngine = {
+      initialize: vi.fn().mockResolvedValue(undefined)
+    } as unknown as TokenTrimEngine;
     server = await buildServer(mockEngine);
   });
 

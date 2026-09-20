@@ -36,6 +36,8 @@ export interface TokenTrimEngineConfig {
   enableTelemetry?: boolean;
 }
 
+const OVERALL_DEADLINE_MS = 25000;
+
 interface PipelineContext {
   originalText: string;
   options: CompressionOptions;
@@ -98,7 +100,7 @@ export class TokenTrimEngine {
     return ratio >= min && ratio <= max;
   }
 
-  async compress(text: string, options: CompressionOptions): Promise<CompressionResult> {
+async compress(text: string, options: CompressionOptions): Promise<CompressionResult> {
     const startTime = Date.now();
     const context: PipelineContext = {
       originalText: text,
@@ -115,7 +117,10 @@ export class TokenTrimEngine {
       startTime
     };
 
-    try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OVERALL_DEADLINE_MS);
+
+    const runPipeline = async (signal: AbortSignal): Promise<CompressionResult> => {
       // Step 1: Analyze input
       context.analysis = await this.analyzer.analyze(text);
       context.originalTokens = await this.countTokens(text, options.targetModel);
@@ -172,9 +177,10 @@ export class TokenTrimEngine {
             targetReductionRatio: options.targetReductionRatio,
             minimumReductionRatio: options.minimumReductionRatio,
             maximumReductionRatio: options.maximumReductionRatio,
-            safeResultMode: options.safeResultMode
+            safeResultMode: options.safeResultMode,
+            signal: controller.signal
           });
-  
+    
           for (const candidate of context.aiCandidates) {
             const verified = await this.verifyCandidate(context, candidate);
             
@@ -213,12 +219,30 @@ export class TokenTrimEngine {
       this.telemetry.recordCompression(finalResult);
 
       return finalResult;
+    };
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener('abort', () => {
+        reject(new TokenTrimError(
+          `Compression timed out after ${OVERALL_DEADLINE_MS}ms`,
+          'COMPRESSION_TIMEOUT',
+          'compression',
+          false,
+          { deadlineMs: OVERALL_DEADLINE_MS }
+        ));
+      }, { once: true });
+    });
+
+    try {
+      return await Promise.race([runPipeline(controller.signal), timeoutPromise]);
     } catch (error) {
       if (error instanceof TokenTrimError) {
         throw error;
       }
       console.error('[TokenTrim] Compression error:', error);
       return this.buildErrorResult(text, context.originalTokens, options, startTime, error);
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -477,6 +501,38 @@ export class TokenTrimEngine {
   async countTokens(text: string, model: TargetModel): Promise<number> {
     const result = await tokenizerRegistry.countTokens(text, createTokenizerConfig(model));
     return result.tokens;
+  }
+
+  /**
+   * Initialize the engine and validate Groq provider configuration.
+   * Throws TokenTrimError if Groq is configured but model is invalid or unavailable.
+   */
+  async initialize(): Promise<void> {
+    if (this.groqProvider) {
+      const health = await this.groqProvider.healthCheck();
+      if (!health.healthy) {
+        const errorMsg = health.error ?? 'Groq health check failed';
+        const modelAvailable = health.modelAvailable ?? false;
+        
+        if (!modelAvailable) {
+          throw new TokenTrimError(
+            `Groq model "${this.config.groqConfig?.model}" is not available. Please check the model ID at console.groq.com/docs/models`,
+            'INVALID_MODEL',
+            'configuration',
+            false,
+            { model: this.config.groqConfig?.model, error: errorMsg }
+          );
+        }
+        
+        throw new TokenTrimError(
+          `Groq provider unhealthy: ${errorMsg}`,
+          'PROVIDER_UNAVAILABLE',
+          'provider',
+          true,
+          { error: errorMsg }
+        );
+      }
+    }
   }
 
   async healthCheck(): Promise<Record<string, import('@tokentrim/providers').ProviderHealth>> {

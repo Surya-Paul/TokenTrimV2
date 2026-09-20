@@ -5,7 +5,7 @@ import type { TokenTrimEngine } from '@tokentrim/core';
 
 describe('Health API', () => {
   let server: FastifyInstance;
-  let healthCheckSpy: ReturnType<typeof vi.fn>;
+  let healthCheckSpy: { (): Promise<{ groq: { healthy: boolean; latencyMs: number; lastChecked: number } }>; mock: any };
 
   beforeEach(async () => {
     healthCheckSpy = vi.fn(async () => ({
@@ -13,7 +13,8 @@ describe('Health API', () => {
     }));
 
     const mockEngine = {
-      healthCheck: healthCheckSpy
+      healthCheck: healthCheckSpy,
+      initialize: vi.fn().mockResolvedValue(undefined)
     } as unknown as TokenTrimEngine;
 
     server = await buildServer(mockEngine);

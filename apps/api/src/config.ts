@@ -44,7 +44,7 @@ const EnvSchema = z.object({
   
   // Limits
   REQUEST_SIZE_LIMIT: z.string().default('1mb'),
-  REQUEST_TIMEOUT_MS: z.coerce.number().default(60000),
+  REQUEST_TIMEOUT_MS: z.coerce.number().default(8000),
   RATE_LIMIT_MAX: z.coerce.number().default(30), // per minute
   
   // App Config
