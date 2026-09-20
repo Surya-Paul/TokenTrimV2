@@ -29,10 +29,9 @@ const CONTENT_TYPE_PATTERNS: Array<{ type: ContentType; patterns: RegExp[]; weig
   {
     type: 'sql',
     patterns: [
-      /\b(?:SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|JOIN|WHERE|GROUP BY|ORDER BY|HAVING)\b/gi,
-      /\b(?:FROM|INTO|VALUES|SET|ON|INNER|LEFT|RIGHT|FULL|OUTER)\b/gi
+      /\b(?:SELECT\s+.+?\s+FROM|INSERT\s+INTO|UPDATE\s+.+?\s+SET|DELETE\s+FROM|CREATE\s+(?:TABLE|DATABASE|INDEX|VIEW)|ALTER\s+(?:TABLE|DATABASE))\b/gi
     ],
-    weight: 9
+    weight: 15
   },
   {
     type: 'json',
@@ -205,16 +204,16 @@ const PROTECTED_PATTERNS: Array<{ type: ProtectedSegment['type']; pattern: RegEx
   { type: 'hash', pattern: /\b[a-f0-9]{32,64}\b/g, reason: 'Hashes must remain intact' },
   { type: 'uuid', pattern: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, reason: 'UUIDs must remain intact' },
   { type: 'version_number', pattern: /\bv?\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?\b/g, reason: 'Version numbers must remain intact' },
-  { type: 'package_name', pattern: /\b@?[a-z0-9-]+\/[a-z0-9-]+\b/g, reason: 'Package names must remain intact' },
+  { type: 'package_name', pattern: /@[a-z0-9-]+\/[a-z0-9-]+/g, reason: 'Package names must remain intact' },
   { type: 'function_name', pattern: /\b[a-zA-Z_][a-zA-Z0-9_]*\(\)/g, reason: 'Function names must remain intact' },
   { type: 'class_name', pattern: /\bclass\s+[A-Z][a-zA-Z0-9_]*\b/g, reason: 'Class names must remain intact' },
   { type: 'variable_name', pattern: /\b(?:const|let|var)\s+[a-zA-Z_][a-zA-Z0-9_]*\s*=/g, reason: 'Variable declarations must remain intact' },
   { type: 'json_key', pattern: /"[^"]+"\s*:/g, reason: 'JSON keys must remain intact' },
   { type: 'sql_identifier', pattern: /\b(?:SELECT|FROM|WHERE|JOIN|INSERT|UPDATE|DELETE|CREATE|TABLE|INDEX|COLUMN)\b/gi, reason: 'SQL identifiers must remain intact' },
-  { type: 'regex', pattern: /\/(?:[^/\\]|\\.)+\/[gimsuy]*/g, reason: 'Regex patterns must remain intact' },
+  { type: 'regex', pattern: /(?:^|[\s=(:,;])(\/(?=[^\s*/])(?:[^/\\\r\n]|\\.)+\/[gimsuy]*)(?=[\s;),.\]}]|$)/gm, reason: 'Regex patterns must remain intact' },
   { type: 'latex', pattern: /\$[\s\S]*?\$/g, reason: 'LaTeX must remain intact' },
   { type: 'command', pattern: /^\$\s+.+$/gm, reason: 'Commands must remain intact' },
-  { type: 'quoted_string', pattern: /"[^"]*"|'[^']*'/g, reason: 'Quoted strings must remain intact' },
+  { type: 'quoted_string', pattern: /"[^"]+"/g, reason: 'Quoted strings must remain intact' },
   { type: 'explicit_constraint', pattern: /\b(?:exactly|precisely|must|required|only|never|without|unless)\b/gi, reason: 'Explicit constraints must be preserved' },
   { type: 'negative_instruction', pattern: /\b(?:do not|don't|must not|should not|avoid|never)\b/gi, reason: 'Negative instructions must be preserved' }
 ];
@@ -233,7 +232,7 @@ export class InputAnalyzer {
   async analyze(text: string): Promise<AnalysisResult> {
     const contentType = this.detectContentType(text);
     const semanticComponents = this.extractSemanticComponents(text);
-    const protectedSegments = this.detectProtectedSegments(text);
+    const protectedSegments = this.detectProtectedSegments(text, contentType);
     const estimatedTokens = await this.estimateTokens(text);
     
     const hasCodeBlocks = /```[\s\S]*?```/.test(text);
@@ -350,7 +349,7 @@ export class InputAnalyzer {
     return baseConfidence[type] || 0.5;
   }
 
-  private detectProtectedSegments(text: string): ProtectedSegment[] {
+  private detectProtectedSegments(text: string, contentType?: ContentType): ProtectedSegment[] {
     const segments: ProtectedSegment[] = [];
 
     for (const { type, pattern, reason } of PROTECTED_PATTERNS) {
@@ -358,12 +357,24 @@ export class InputAnalyzer {
       const regex = new RegExp(pattern.source, pattern.flags);
       
       while ((match = regex.exec(text)) !== null) {
-        const startIndex = match.index;
-        const endIndex = startIndex + match[0].length;
+        // Use capture group 1 if present (e.g. regex pattern), otherwise full match
+        const content = match[1] || match[0];
+        const startIndex = match[1] ? match.index + match[0].indexOf(match[1]) : match.index;
+        const endIndex = startIndex + content.length;
+
+        // For regex type, validate it looks like an actual regex, not prose
+        if (type === 'regex' && !this.isLikelyRegex(content)) {
+          continue;
+        }
+
+        // For SQL identifiers, only protect if it's SQL content type or looks like a SQL statement
+        if (type === 'sql_identifier' && contentType !== 'sql' && !this.hasSqlContext(text, startIndex)) {
+          continue;
+        }
 
         segments.push({
           type,
-          content: match[0],
+          content,
           startIndex,
           endIndex,
           reason
@@ -374,6 +385,40 @@ export class InputAnalyzer {
     }
 
     return segments.sort((a, b) => a.startIndex - b.startIndex);
+  }
+
+  /**
+   * Heuristic: checks if a keyword is in the context of structural SQL keywords
+   */
+  private hasSqlContext(text: string, index: number): boolean {
+    const windowStart = Math.max(0, index - 50);
+    const windowEnd = Math.min(text.length, index + 50);
+    const contextWindow = text.slice(windowStart, windowEnd);
+    
+    // Look for structural SQL keywords that indicate actual SQL, not just action verbs
+    const structuralSqlKeywords = /\b(?:FROM|WHERE|JOIN|TABLE|INDEX|COLUMN|INTO|VALUES|SET|INNER|LEFT|RIGHT|OUTER|GROUP BY|ORDER BY|HAVING)\b/i;
+    
+    return structuralSqlKeywords.test(contextWindow);
+  }
+
+  /**
+   * Heuristic: a slash-delimited string is a real regex if it has flags
+   * OR contains at least one common regex metacharacter.
+   */
+  private isLikelyRegex(candidate: string): boolean {
+    // Match the /pattern/flags structure
+    const m = candidate.match(/^\/(.+)\/([gimsuy]*)$/s);
+    if (!m) return false;
+
+    const body = m[1] || '';
+    const flags = m[2] || '';
+
+    // If it has flags, it's almost certainly a regex
+    if (flags.length > 0) return true;
+
+    // Check for common regex metacharacters that wouldn't appear in prose
+    const regexMetachars = /[\][()+*?{}|^$]|\\[dDwWsSbBnrt]/;
+    return regexMetachars.test(body);
   }
 
   private hasSecrets(text: string): boolean {

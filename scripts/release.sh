@@ -27,7 +27,7 @@ pnpm typecheck
 
 # Build all
 echo "🔨 Building all packages..."
-pnpm build:all
+pnpm build
 
 # Bump version
 echo "📦 Bumping version ($VERSION_TYPE)..."

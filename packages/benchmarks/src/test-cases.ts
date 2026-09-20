@@ -1,4 +1,4 @@
-import { BenchmarkCase, BenchmarkCategory, TargetModel } from '@tokentrim/shared';
+import { BenchmarkCase } from '@tokentrim/shared';
 
 export const BENCHMARK_CASES: BenchmarkCase[] = [
   // Normal prompts

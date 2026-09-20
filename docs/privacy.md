@@ -2,67 +2,55 @@
 
 ## Core Principle
 
-**Local processing whenever possible. Cloud processing only when necessary. Never without consent.**
+**Server-side processing. Cloud AI only when needed. Secrets never sent.**
 
 ## Data Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      YOUR MACHINE                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐              │
-│  │ Analyzer │───►│ Tier 0   │───►│ Phi-4    │              │
-│  │          │    │ Compress │    │ (Ollama) │              │
-│  └──────────┘    └──────────┘    └──────────┘              │
-│       │                                    │                │
-│       ▼                                    ▼                │
-│  ┌──────────────────────────────────────────────┐           │
-│  │           VERIFICATION ENGINE                 │           │
-│  │  Instructions │ Constraints │ Technical       │           │
-│  └──────────────────────────────────────────────┘           │
-│       │                                                      │
-│       ▼                                                      │
-│  ┌──────────────────────────────────────────────┐           │
-│  │         LOCAL OUTPUT (DEFAULT)                 │           │
-│  └──────────────────────────────────────────────┘           │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              │ Only if enabled + allowed
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│                        CLOUD (GROQ)                          │
-├─────────────────────────────────────────────────────────────┤
-│  ┌──────────┐    ┌──────────┐    ┌──────────────────────┐   │
-│  │  Groq    │───►│ Generate │───►│ Verify & Select Best │   │
-│  │  API     │    │ Candidates           │                  │   │
-│  └──────────┘    └──────────┘    └──────────────────────┘   │
-│                              │                                │
-│                              ▼                                │
-│  ┌──────────────────────────────────────────────┐           │
-│  │         RETURN TO LOCAL MACHINE                │           │
-│  └──────────────────────────────────────────────┘           │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     WEB CLIENT (Browser)                      │
+│                                                               │
+│  ┌──────────┐                           ┌──────────────────┐ │
+│  │  User    │ ──── POST /compressions ──►│  Display Result  │ │
+│  │  Input   │                           │  (compressed)    │ │
+│  └──────────┘                           └──────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+                           │
+                           ▼ HTTPS
+┌──────────────────────────────────────────────────────────────┐
+│                     API SERVER (Fastify)                       │
+│                                                               │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐               │
+│  │ Secret   │───►│ Tier 0   │───►│ Groq AI  │               │
+│  │ Scanner  │    │ Compress │    │ Compress │               │
+│  └──────────┘    └──────────┘    └──────────┘               │
+│       │                               │                      │
+│       ▼                               ▼                      │
+│  BLOCK if secrets           ┌──────────────────┐             │
+│  (HTTP 422)                 │  Verification    │             │
+│                             │  Engine          │             │
+│                             └──────────────────┘             │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## What Never Leaves Your Machine
+## What the Web Client Handles
 
-- ✅ Original prompts (unless cloud fallback explicitly used)
-- ✅ Compressed results
-- ✅ Analytics data (aggregated only)
-- ✅ Settings & preferences
-- ✅ API keys (stored in OS keychain)
-- ✅ Secret scan results
+- ✅ User input (prompt text)
+- ✅ Settings & preferences (local storage)
+- ✅ Displaying compression results
 
-## What Goes to Cloud (Only With Consent)
+## What the Web Client Never Sees
+
+- ❌ API keys (Groq key is server-side only)
+- ❌ Internal compression pipeline state
+- ❌ Raw secret scan results
+
+## What Goes to the Groq Cloud
 
 **Only when ALL of these are true:**
-1. Cloud fallback enabled in Settings
-2. No secrets detected in prompt
-3. Local compression insufficient or failed
-4. User confirmed (if confirmation required)
+1. No secrets detected in prompt
+2. Tier 0 (deterministic) compression is insufficient
+3. `GROQ_API_KEY` is configured on the server
 
 **Data sent to Groq:**
 - Compression prompt (system + user)
@@ -83,9 +71,7 @@
 
 ### Cloud Blocking
 ```
-Secrets Detected + neverSendSecrets = true  →  BLOCK CLOUD
-localOnlyMode = true                        →  BLOCK CLOUD
-allowCloudProcessing = false                →  BLOCK CLOUD
+Secrets Detected + neverSendSecrets = true  →  HTTP 422 (prompt never leaves server)
 ```
 
 ### Masking in Logs
@@ -98,39 +84,23 @@ Logged:    "API key: sk-ab******34"
 ## API Key Storage
 
 ### Groq API Key
-- Stored in OS keychain via `keytar`
-- **Never** written to settings file
-- **Never** sent to renderer process
-- **Never** logged
-
-| Platform | Storage |
-|----------|---------|
-| macOS | Keychain |
-| Windows | Credential Manager |
-| Linux | Secret Service (libsecret) |
-
-### Ollama
-- No API key needed
-- Local HTTP endpoint only
-- Config stored in settings (not secret)
+- Stored in server environment variables (`apps/api/.env`)
+- **Never** committed to version control
+- **Never** sent to the browser or included in the web bundle
+- **Never** logged (Pino redaction)
 
 ## Settings Privacy
 
 ```typescript
 interface PrivacySettings {
   neverSendSecrets: true,        // Block cloud if secrets found
-  allowCloudProcessing: false,   // Master cloud switch
-  requireCloudConfirmation: true,// Prompt before cloud
   maskSecretsInLogs: true,       // Mask in debug logs
-  localOnlyMode: false           // Hard disable cloud
 }
 ```
 
-**Defaults:** Maximum privacy. User must explicitly enable cloud.
-
 ## Analytics
 
-### Collected (Local Only)
+### Collected (Server-Side Only)
 ```typescript
 {
   totalPrompts: number,
@@ -140,12 +110,9 @@ interface PrivacySettings {
   compressionOverhead: number,
   netTokensSaved: number,
   estimatedMoneySaved: number,
-  localCompressionPercentage: number,
-  cloudCompressionPercentage: number,
   averageLatencyMs: number,
   failureRate: number,
-  cloudEscalationRate: number,
-  byProvider: { deterministic, ollama, groq },
+  byProvider: { deterministic, groq },
   byContentType: { prose, code, sql, ... }
 }
 ```
@@ -158,19 +125,11 @@ interface PrivacySettings {
 - ❌ Timestamps of individual operations
 - ❌ Error details with context
 
-### Storage
-- Local file: `~/Library/Application Support/TokenTrim/telemetry.json` (macOS)
-- Encrypted at rest by OS
-- User can disable: `Settings → Advanced → Diagnostics`
-- User can reset: `Settings → Danger Zone → Clear Analytics Data`
-
 ## Network Connections
 
 | Destination | Purpose | When |
 |-------------|---------|------|
-| `http://localhost:11434` | Ollama API | Local AI enabled |
-| `https://api.groq.com` | Groq API | Cloud fallback enabled + allowed |
-| `https://github.com` | Update check | Optional, manual |
+| `https://api.groq.com` | Groq API | AI compression requested |
 
 **No telemetry endpoints. No analytics endpoints. No tracking pixels.**
 
@@ -179,54 +138,33 @@ interface PrivacySettings {
 ### Mitigated
 | Threat | Mitigation |
 |--------|------------|
-| Prompt exfiltration | Local-only default, secret blocking |
-| API key theft | OS keychain, never in settings/logs |
+| Prompt exfiltration | Secret blocking, HTTPS, CORS |
+| API key theft | Server env only, log redaction |
 | Cloud data retention | Groq doesn't train on API data |
 | Injection attacks | Verification engine, no instruction following |
 | Supply chain | pnpm lockfile, dependency review CI |
-| Electron exploits | Sandbox, context isolation, CSP |
 
 ### Residual Risks
 | Risk | Likelihood | Impact | Notes |
 |------|------------|--------|-------|
-| Ollama vulnerability | Low | Medium | Local network only |
 | Groq data breach | Low | Low | No PII sent |
 | Secret detection false negative | Low | High | Multiple pattern layers |
-| Settings file exposure | Low | Medium | No secrets stored |
+| Server env file exposure | Low | Medium | File permissions, .gitignore |
 
 ## Compliance
 
 - **GDPR**: No personal data processed
 - **CCPA**: No sale of data, no tracking
-- **SOC2**: Local-first aligns with data minimization
+- **SOC2**: Data minimization aligned
 - **HIPAA**: No PHI processed (user responsibility)
-
-## User Controls
-
-### In App
-- Settings → Privacy: All cloud controls
-- Settings → Danger Zone: Clear analytics
-- Compression panel: Shows processing mode (LOCAL/CLOUD)
-
-### Via Config
-```bash
-# Disable all cloud
-TOKENTRIM_LOCAL_ONLY=true
-
-# Disable telemetry
-TOKENTRIM_TELEMETRY=false
-
-# Custom Ollama endpoint
-OLLAMA_BASE_URL=http://custom-host:11434
-```
 
 ## Audit Checklist
 
 - [ ] No prompt content in logs
-- [ ] No API keys in settings file
+- [ ] No API keys in settings or web bundle
 - [ ] Secret detection blocks cloud
 - [ ] Analytics aggregated only
-- [ ] No external connections by default
-- [ ] Electron security hardened
+- [ ] CORS restricted to exact web client origin
+- [ ] `.env` files not committed
 - [ ] Dependencies reviewed
 - [ ] Build reproducible

@@ -216,10 +216,6 @@ export class SecretDetector {
   }
 
   canSendToCloud(text: string): { allowed: boolean; reason?: string } {
-    if (this.settings.localOnlyMode) {
-      return { allowed: false, reason: 'Local-only mode enabled' };
-    }
-    
     const result = this.scan(text);
     
     if (result.hasSecrets && this.settings.neverSendSecrets) {
@@ -233,9 +229,6 @@ export class SecretDetector {
 export function createDefaultPrivacySettings(): PrivacySettings {
   return {
     neverSendSecrets: true,
-    allowCloudProcessing: false,
-    requireCloudConfirmation: true,
-    maskSecretsInLogs: true,
-    localOnlyMode: false
+    maskSecretsInLogs: true
   };
 }

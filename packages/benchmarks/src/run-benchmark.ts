@@ -1,7 +1,6 @@
 import { TokenTrimEngine, TokenTrimEngineConfig } from '@tokentrim/core';
-import { BenchmarkCase, BenchmarkResult, BenchmarkReport, BenchmarkCategory } from '@tokentrim/shared';
+import { BenchmarkResult, BenchmarkReport, BenchmarkCategory, TargetModel } from '@tokentrim/shared';
 import { BENCHMARK_CASES } from './test-cases';
-import { createDefaultPrivacySettings } from '@tokentrim/privacy';
 
 async function runBenchmarks(options: {
   categories?: BenchmarkCategory[];
@@ -23,7 +22,7 @@ async function runBenchmarks(options: {
 
   // Initialize engine (deterministic only for benchmark)
   const config: TokenTrimEngineConfig = {
-    targetModel: targetModel as any,
+    targetModel: targetModel as TargetModel,
     enableTelemetry: false
   };
   const engine = new TokenTrimEngine(config);
@@ -41,8 +40,6 @@ async function runBenchmarks(options: {
         targetModel: testCase.targetModel,
         maxCompressionRatio: 0.5,
         preserveFormatting: true,
-        allowCloudFallback: false,
-        requireConfirmationForCloud: true,
         verificationThresholds: {
           semanticConfidence: 0.85,
           instructionConfidence: 0.95,
@@ -57,8 +54,6 @@ async function runBenchmarks(options: {
       // Calculate metrics
       const originalTokens = compressionResult.originalTokens;
       const compressedTokens = compressionResult.finalTokens;
-      const grossReduction = originalTokens > 0 ? (compressionResult.grossReduction / originalTokens) : 0;
-      const netReduction = originalTokens > 0 ? (compressionResult.netSavings / originalTokens) : 0;
 
       // Check must-preserve
       const preserved = testCase.mustPreserve.every(term => 

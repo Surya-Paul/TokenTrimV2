@@ -5,7 +5,6 @@
 - Node.js 20+
 - pnpm 9+
 - Git
-- Ollama (for local AI testing)
 
 ## Getting Started
 
@@ -17,47 +16,58 @@ cd tokentrim
 # Install dependencies
 pnpm install
 
+# Copy environment files
+cp apps/api/.env.example apps/api/.env
+cp apps/web/.env.example apps/web/.env
+
+# Set your Groq API key in apps/api/.env
+# GROQ_API_KEY=gsk_your_key_here
+
 # Build all packages
-pnpm build:all
+pnpm build
 
 # Start development
 pnpm dev
 ```
+
+This starts both the API server (http://localhost:3001) and Web Client (http://localhost:5173).
 
 ## Project Structure
 
 ```
 TokenTrim/
 ├── apps/
-│   └── desktop/              # Electron app
+│   ├── api/                  # Fastify API server
+│   │   ├── src/
+│   │   │   ├── routes/       # HTTP route handlers
+│   │   │   ├── server.ts     # Server setup & middleware
+│   │   │   └── config.ts     # Env parsing & validation
+│   │   ├── .env.example
+│   │   └── package.json
+│   │
+│   └── web/                  # React web client
 │       ├── src/
-│       │   ├── main/         # Main process
-│       │   ├── renderer/     # React UI
-│       │   └── preload/      # Secure IPC bridge
-│       ├── package.json
-│       ├── tsconfig.json
-│       └── vite.config.ts
+│       │   ├── api/          # API client
+│       │   ├── components/   # UI components
+│       │   ├── panels/       # Page panels
+│       │   └── settings.ts   # Client settings
+│       ├── .env.example
+│       └── package.json
 │
 ├── packages/
 │   ├── core/                 # Orchestration engine
 │   ├── analyzer/             # Input analysis
 │   ├── compressor/           # Tier 0 + AI compression
-│   ├── tokenizer/            # Multi-model tokenization
+│   ├── tokenizer/            # Multi-model token estimation
 │   ├── verifier/             # Safety verification
-│   ├── providers/            # Ollama + Groq
+│   ├── providers/            # Groq provider
 │   ├── privacy/              # Secret detection
-│   ├── telemetry/            # Local analytics
-│   └── shared/               # Types & utilities
-│
-├── tests/                    # Test suites
-│   ├── unit/
-│   ├── integration/
-│   ├── regression/
-│   ├── security/
-│   └── benchmarks/
+│   ├── telemetry/            # Analytics
+│   ├── shared/               # Types & utilities
+│   └── benchmarks/           # Performance benchmarks
 │
 ├── docs/                     # Documentation
-├── scripts/                  # Build/deploy scripts
+├── scripts/                  # Dev setup scripts
 └── .github/workflows/        # CI/CD
 ```
 
@@ -187,15 +197,17 @@ type ProviderStatus = 'available' | 'unavailable' | 'loading';
 
 ## Testing
 
-### Test Organization
+### Running Tests
 
-```
-tests/
-├── unit/               # Pure function tests
-├── integration/        # Cross-package tests
-├── regression/         # Bug regression tests
-├── security/           # Security property tests
-└── benchmarks/         # Performance benchmarks
+```bash
+# All tests
+pnpm test
+
+# Watch mode (specific package)
+pnpm --filter @tokentrim/core test -- --watch
+
+# Coverage
+pnpm test -- --coverage
 ```
 
 ### Writing Unit Tests
@@ -220,34 +232,11 @@ describe('InputAnalyzer', () => {
 });
 ```
 
-### Running Tests
-
-```bash
-# All tests
-pnpm test
-
-# Unit only
-pnpm test:unit
-
-# Integration
-pnpm test:integration
-
-# Security
-pnpm test:security
-
-# Watch mode
-pnpm test:watch
-
-# Coverage
-pnpm test -- --coverage
-```
-
 ### Regression Tests
 
 Every bug fix requires a regression test:
 
 ```typescript
-// tests/regression/issue-123-negative-instruction.test.ts
 import { describe, it, expect } from 'vitest';
 import { TokenTrimEngine } from '@tokentrim/core';
 
@@ -338,19 +327,24 @@ perf(tokenizer): cache encoder instances
 
 ## Debugging
 
-### Main Process
+### API Server
 
 ```bash
-# DevTools opens automatically in development
-# Or attach via:
-# Chrome → chrome://inspect → Open dedicated DevTools for Node
+# Start API server with debug logging
+LOG_LEVEL=debug pnpm --filter @tokentrim/api dev
+
+# Attach Node.js inspector
+node --inspect apps/api/dist/server.js
 ```
 
-### Renderer Process
+### Web Client
 
 ```bash
-# React DevTools available
-# Network tab shows IPC calls
+# Start with Vite dev server
+pnpm --filter @tokentrim/web dev
+
+# React DevTools available in browser
+# Network tab shows API calls
 ```
 
 ### VS Code Debug Config
@@ -359,10 +353,11 @@ perf(tokenizer): cache encoder instances
 {
   "type": "node",
   "request": "launch",
-  "name": "Debug Main",
-  "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron",
-  "runtimeArgs": ["${workspaceFolder}/apps/desktop/dist/main/index.js"],
-  "cwd": "${workspaceFolder}/apps/desktop"
+  "name": "Debug API Server",
+  "program": "${workspaceFolder}/apps/api/src/server.ts",
+  "cwd": "${workspaceFolder}/apps/api",
+  "runtimeExecutable": "npx",
+  "runtimeArgs": ["tsx"]
 }
 ```
 
@@ -380,15 +375,13 @@ perf(tokenizer): cache encoder instances
 1. Implement `LLMProvider` in `@tokentrim/providers`
 2. Add to `ProviderFactory`
 3. Add config type
-4. Update settings UI
-5. Add health check endpoint
+4. Add health check endpoint
 
 ### Add New Verification Check
 
 1. Add to `SafetyCheckType` enum
 2. Implement in `VerificationEngine.verify()`
 3. Add threshold to `VerificationThresholds`
-4. Update settings UI
 
 ### Update Tokenizer
 
@@ -400,11 +393,8 @@ perf(tokenizer): cache encoder instances
 ## Performance Profiling
 
 ```bash
-# Profile main process
-node --inspect apps/desktop/dist/main/index.js
-
-# Profile renderer
-# Chrome DevTools → Performance tab
+# Profile API server
+node --inspect apps/api/dist/server.js
 
 # Benchmark specific function
 import { performance } from 'perf_hooks';
@@ -431,11 +421,8 @@ pnpm version major
 ### Build Release
 
 ```bash
-# Build all
-pnpm build:all
-
-# Package desktop
-pnpm --filter @tokentrim/desktop package
+# Build all packages
+pnpm build
 ```
 
 ### Publish
@@ -453,7 +440,7 @@ pnpm --filter @tokentrim/desktop package
 # Clean and rebuild
 pnpm clean
 pnpm install
-pnpm build:all
+pnpm build
 ```
 
 ### Type Errors
@@ -481,7 +468,8 @@ pnpm test -- --inspect-brk
 ## Resources
 
 - [TypeScript Handbook](https://www.typescriptlang.org/docs/)
-- [Electron Security](https://www.electronjs.org/docs/latest/tutorial/security)
+- [Fastify Documentation](https://fastify.dev/docs/latest/)
+- [Vite Guide](https://vitejs.dev/guide/)
 - [Vitest Guide](https://vitest.dev/guide/)
 - [pnpm Workspaces](https://pnpm.io/workspaces)
 - [Zod Validation](https://zod.dev/)

@@ -7,20 +7,22 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    APPLICATION LAYER                         │
-│  • Input validation & sanitization                          │
+│  • Input validation & sanitization (Zod schemas)            │
 │  • Secret detection & blocking                               │
 │  • Verification engine (instruction/constraint/technical)   │
 │  • NET savings enforcement                                   │
 ├─────────────────────────────────────────────────────────────┤
-│                    FRAMEWORK LAYER                           │
-│  • Electron security (sandbox, context isolation, CSP)      │
-│  • Secure IPC (allowlisted channels, sender validation)     │
+│                    API LAYER                                  │
+│  • CORS origin restriction                                   │
+│  • Rate limiting (per-IP)                                    │
+│  • Request body-size limit                                   │
+│  • Pino log redaction (prompt text, auth headers)            │
 │  • TypeScript strict mode                                    │
 ├─────────────────────────────────────────────────────────────┤
 │                    RUNTIME LAYER                             │
-│  • OS keychain for secrets (keytar)                         │
-│  • Process isolation (main vs renderer)                     │
-│  • No nodeIntegration in renderer                           │
+│  • Server secrets in environment variables only              │
+│  • No secrets in the browser bundle                          │
+│  • Process-level isolation (API ↔ Web)                       │
 ├─────────────────────────────────────────────────────────────┤
 │                    SUPPLY CHAIN LAYER                        │
 │  • pnpm lockfile integrity                                  │
@@ -30,112 +32,33 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Electron Security
+## API Server Security
 
-### Main Process Hardening
+### CORS
 
-```typescript
-// Security-critical settings
-webPreferences: {
-  preload: join(__dirname, '../preload/index.js'),
-  contextIsolation: true,      // Isolate renderer from Node.js
-  nodeIntegration: false,      // No Node.js in renderer
-  sandbox: true,               // Chromium sandbox
-  webSecurity: true,           // Same-origin policy
-  allowRunningInsecureContent: false,
-  experimentalFeatures: false
-}
+The `CORS_ORIGIN` environment variable controls which browser origins may call the API. In production, set it to your exact web client URL (e.g. `https://tokentrim.example.com`). Wildcard origins are not recommended.
 
-// Navigation prevention
-webContents.setWindowOpenHandler(({ url }) => {
-  shell.openExternal(url);
-  return { action: 'deny' };
-});
+### Rate Limiting
 
-webContents.on('new-window', (event) => {
-  event.preventDefault();
-});
-```
+Fastify rate limiting is applied per-IP using `@fastify/rate-limit`. The `RATE_LIMIT_MAX` environment variable sets the maximum requests per minute.
 
-### Content Security Policy
+### Request Body Limit
 
-```html
-<meta http-equiv="Content-Security-Policy" content="
-  default-src 'self';
-  script-src 'self';
-  style-src 'self' 'unsafe-inline';
-  img-src 'self' data:;
-  connect-src 'self' http://localhost:11434 https://api.groq.com;
-  font-src 'self';
-  object-src 'none';
-  base-uri 'self';
-  form-action 'none';
-  frame-ancestors 'none';
-">
-```
+The `REQUEST_SIZE_LIMIT` environment variable (e.g. `1mb`, `500kb`) is parsed at startup and applied to Fastify's `bodyLimit` option. Invalid values cause a startup crash with a clear error message.
 
-### Secure IPC
+### Log Redaction
 
-**Preload Script (Allowlist):**
-```typescript
-const ALLOWED_CHANNELS = {
-  invoke: [
-    'compress:request',
-    'settings:get', 'settings:set', 'settings:reset',
-    'analytics:get',
-    'benchmark:run',
-    'provider:health', 'provider:models',
-    'privacy:scan',
-    'app:version', 'app:quit',
-    'window:minimize', 'window:maximize', 'window:close', 'window:isMaximized'
-  ],
-  send: ['renderer:ready'],
-  on: [
-    'compression:complete',
-    'navigate',
-    'settings:updated',
-    'provider:status',
-    'log:info', 'log:warn', 'log:error'
-  ]
-};
-```
-
-**Main Process Validation:**
-```typescript
-ipcMain.handle('compress:request', async (event, payload) => {
-  // Validate sender
-  if (!event.senderFrame || event.senderFrame.url !== 'file://...') {
-    throw new Error('Invalid sender');
-  }
-  // Validate payload
-  if (!payload || typeof payload.text !== 'string') {
-    throw new Error('Invalid payload');
-  }
-  // Process...
-});
-```
+Pino redacts `req.headers.authorization` and `req.body.text` to prevent prompt text and auth tokens from appearing in logs.
 
 ## Secret Management
 
-### API Key Storage (keytar)
+### API Key Storage
 
-```typescript
-// Storing
-await keytar.setPassword('TokenTrim', 'groq-api-key', apiKey);
+The Groq API key is stored exclusively in the API server's environment variables (`apps/api/.env`):
 
-// Retrieving
-const apiKey = await keytar.getPassword('TokenTrim', 'groq-api-key');
-
-// Deleting
-await keytar.deletePassword('TokenTrim', 'groq-api-key');
-```
-
-**Platform Security:**
-| Platform | Backend | Encryption |
-|----------|---------|------------|
-| macOS | Keychain Services | Hardware-backed (Secure Enclave) |
-| Windows | Credential Manager | DPAPI (user credentials) |
-| Linux | Secret Service | libsecret (gnome-keyring/kwallet) |
+- **Never** committed to version control (`.env` is in `.gitignore`).
+- **Never** sent to the browser or included in the web client bundle.
+- **Never** logged (redacted by Pino).
 
 ### Secret Detection Pipeline
 
@@ -143,15 +66,12 @@ await keytar.deletePassword('TokenTrim', 'groq-api-key');
 // 1. Scan input
 const scan = secretDetector.scan(prompt);
 
-// 2. Check policy
-const cloudAllowed = secretDetector.canSendToCloud(prompt);
-
-// 3. Block if needed
-if (!cloudAllowed.allowed) {
-  // Fall back to Tier 0 or return original
+// 2. Block if secrets detected
+if (scan.hasSecrets) {
+  // Return HTTP 422 — prompt is never sent to Groq
 }
 
-// 4. Mask in any logs
+// 3. Mask in any logs
 const masked = secretDetector.maskSecrets(prompt);
 ```
 
@@ -166,18 +86,11 @@ const masked = secretDetector.maskSecrets(prompt);
 
 ## Provider Security
 
-### Ollama (Local)
-- No authentication (local only)
-- HTTP only (localhost)
-- Health check before use
-- Timeout enforcement (30s default)
-
 ### Groq (Cloud)
-```typescript
-// Security features
+```
 - API key in Authorization header (never in URL)
 - TLS 1.2+ enforced
-- Request timeout (30s)
+- Request timeout (configurable via REQUEST_TIMEOUT_MS)
 - Exponential backoff retry (max 3)
 - Circuit breaker (5 failures → 60s cooldown)
 - Rate limit handling (respects Retry-After)
@@ -268,8 +181,9 @@ CLOSED (normal) → 5 failures → OPEN (cooldown)
 ```typescript
 // Zod schemas for all external input
 const CompressionRequestSchema = z.object({
-  text: z.string().max(1_000_000),  // 1MB limit
-  options: CompressionOptionsSchema
+  text: z.string().max(100_000),
+  targetModel: TargetModelSchema,
+  compressionTarget: CompressionTargetSchema
 });
 ```
 
@@ -279,28 +193,27 @@ const CompressionRequestSchema = z.object({
 
 | Threat | Mitigation |
 |--------|------------|
-| **S**poofing | IPC sender validation, HTTPS for Groq |
-| **T**ampering | Verification engine, readonly settings |
+| **S**poofing | CORS origin restriction, HTTPS for Groq |
+| **T**ampering | Verification engine, Zod input validation |
 | **R**epudiation | Structured logging, audit trail |
-| **I**nformation Disclosure | Secret detection, local-first, keychain |
-| **D**enial of Service | Timeouts, circuit breakers, input limits |
-| **E**levation of Privilege | Sandbox, no nodeIntegration, context isolation |
+| **I**nformation Disclosure | Secret detection, env-only keys, log redaction |
+| **D**enial of Service | Rate limiting, timeouts, circuit breakers, body-size limits |
+| **E**levation of Privilege | No server-side eval, TypeScript strict mode |
 
 ### Attack Surface
 
 | Vector | Status | Mitigation |
 |--------|--------|------------|
 | Malicious prompt | ✅ Mitigated | Verification engine, no instruction following |
-| Secret exfiltration | ✅ Mitigated | Detection blocks cloud, local default |
-| IPC exploitation | ✅ Mitigated | Allowlisted channels, sender validation |
+| Secret exfiltration | ✅ Mitigated | Detection blocks cloud, HTTP 422 returned |
 | Prototype pollution | ✅ Mitigated | TypeScript, frozen objects |
 | Supply chain | ✅ Mitigated | Lockfile, audit, review |
-| Electron RCE | ✅ Mitigated | Sandbox, CSP, no remote content |
+| Oversized payload | ✅ Mitigated | REQUEST_SIZE_LIMIT enforced |
 
 ## Incident Response
 
 ### If Secret Leaked to Cloud
-1. User notified immediately
+1. User notified immediately via HTTP 422 (should not happen; secrets are blocked)
 2. Cloud request logged (masked)
 3. Groq API key rotation recommended
 4. Secret detection patterns updated
@@ -310,11 +223,6 @@ const CompressionRequestSchema = z.object({
 2. Thresholds reviewed
 3. Pattern coverage expanded
 
-### If Electron Vulnerability
-1. Update Electron immediately
-2. Security patch release
-3. User notification via auto-update
-
 ## Security Checklist
 
 ### Pre-Release
@@ -322,23 +230,18 @@ const CompressionRequestSchema = z.object({
 - [ ] `trufflehog` scan clean
 - [ ] Dependency review passes
 - [ ] All security tests pass
-- [ ] Electron version current
-- [ ] Build signed & notarized (macOS)
-- [ ] Build signed (Windows)
+- [ ] `.env` files are in `.gitignore`
 
 ### Runtime
-- [ ] CSP headers present
-- [ ] Sandbox enabled
-- [ ] Context isolation enabled
-- [ ] No nodeIntegration
-- [ ] IPC allowlist enforced
+- [ ] CORS restricted to exact web client origin
+- [ ] Rate limiting enabled
 - [ ] Timeouts on all network calls
 - [ ] Circuit breakers active
+- [ ] Log redaction verified (no prompt text in logs)
 
 ### Post-Release
 - [ ] Monitor for CVE in dependencies
-- [ ] Monitor Electron releases
-- [ ] Monitor Groq/Ollama security advisories
+- [ ] Monitor Groq security advisories
 - [ ] User-reported security issues triaged <24h
 
 ## Reporting Security Issues

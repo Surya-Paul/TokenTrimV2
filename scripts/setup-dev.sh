@@ -1,5 +1,5 @@
 #!/bin/bash
-# Development setup script for TokenTrim
+# Development setup script for TokenTrim (Web + API)
 
 set -e
 
@@ -25,25 +25,21 @@ echo "✅ pnpm $(pnpm --version)"
 echo "📦 Installing dependencies..."
 pnpm install --frozen-lockfile
 
+# Copy env files if they don't exist
+if [ ! -f apps/api/.env ]; then
+    echo "📋 Copying apps/api/.env.example → apps/api/.env"
+    cp apps/api/.env.example apps/api/.env
+    echo "   ⚠️  Set your GROQ_API_KEY in apps/api/.env"
+fi
+
+if [ ! -f apps/web/.env ]; then
+    echo "📋 Copying apps/web/.env.example → apps/web/.env"
+    cp apps/web/.env.example apps/web/.env
+fi
+
 # Build all packages
 echo "🔨 Building all packages..."
-pnpm build:all
-
-# Check if Ollama is available
-if command -v ollama &> /dev/null; then
-    echo "✅ Ollama found: $(ollama --version)"
-    
-    # Check if phi4-mini is pulled
-    if ollama list | grep -q "phi4-mini"; then
-        echo "✅ Phi-4-mini model available"
-    else
-        echo "⚠️  Phi-4-mini not found. Pulling..."
-        ollama pull phi4-mini
-    fi
-else
-    echo "⚠️  Ollama not installed. Install from https://ollama.ai"
-    echo "   Then run: ollama pull phi4-mini"
-fi
+pnpm build
 
 # Run tests
 echo "🧪 Running tests..."
@@ -61,14 +57,14 @@ echo ""
 echo "✅ Development setup complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Start Ollama: ollama serve"
+echo "  1. Set your GROQ_API_KEY in apps/api/.env"
 echo "  2. Start dev: pnpm dev"
-echo "  3. Open http://localhost:3000 (renderer)"
-echo "  4. Electron window will open automatically"
+echo "     → API server: http://localhost:3001"
+echo "     → Web client: http://localhost:5173"
 echo ""
 echo "Useful commands:"
-echo "  pnpm dev              # Start all dev processes"
-echo "  pnpm build:all        # Build all packages"
+echo "  pnpm dev              # Start API + Web dev servers"
+echo "  pnpm build            # Build all packages"
 echo "  pnpm test             # Run all tests"
-echo "  pnpm benchmark        # Run benchmarks"
-echo "  pnpm --filter @tokentrim/desktop package  # Build desktop app"
+echo "  pnpm typecheck        # Check types across workspace"
+echo "  pnpm lint             # Lint all packages"

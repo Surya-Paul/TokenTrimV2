@@ -14,7 +14,7 @@ import {
 } from '@tokentrim/shared';
 import { InputAnalyzer } from '@tokentrim/analyzer';
 import { Tier0Compressor } from '@tokentrim/compressor';
-import { AICompressor, ForceTargetDiagnostics, ForceTargetAttempt } from '@tokentrim/compressor';
+import { AICompressor, ForceTargetDiagnostics } from '@tokentrim/compressor';
 import { VerificationEngine } from '@tokentrim/verifier';
 import { SecretDetector } from '@tokentrim/privacy';
 import { ProviderFactory, GroqProvider } from '@tokentrim/providers';
@@ -339,7 +339,7 @@ export class TokenTrimEngine {
         }
         
         // Build detailed rejection reason with diagnostics
-        let rejectionReason = this.buildForceTargetRejectionReason(
+        const rejectionReason = this.buildForceTargetRejectionReason(
           targetPercent,
           minPercent,
           maxPercent,

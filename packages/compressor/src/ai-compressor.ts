@@ -553,13 +553,7 @@ export class AICompressor {
     };
 
     const startTime = Date.now();
-    let response;
-    try {
-      response = await provider.generate(prompt, generateOptions);
-    } catch (error) {
-      // Provider error - propagate for diagnostics
-      throw error;
-    }
+    const response = await provider.generate(prompt, generateOptions);
     const processingTime = Date.now() - startTime;
 
     // Clean up the response

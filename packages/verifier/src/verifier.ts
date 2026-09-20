@@ -54,7 +54,15 @@ export class VerificationEngine {
     this.thresholds = { ...this.thresholds, ...thresholds };
   }
 
-  async verify(original: string, compressed: string, candidateScores: SafetyScores): Promise<VerificationResult> {
+  async verify(
+    original: string,
+    compressed: string,
+    candidateScores: SafetyScores,
+    thresholdOverrides: Partial<VerificationThresholds> = {}
+  ): Promise<VerificationResult> {
+    // Per-request targets must not mutate this instance's defaults: the API can
+    // process concurrent conservative and extreme requests safely.
+    const thresholds = { ...this.thresholds, ...thresholdOverrides };
     const originalAnalysis = await this.analyzer.analyze(original);
     const compressedAnalysis = await this.analyzer.analyze(compressed);
 
@@ -92,9 +100,9 @@ export class VerificationEngine {
     const technicalScore = this.calculateTechnicalScore(technicalCheck);
     details.push({
       check: 'technical_integrity',
-      passed: technicalScore >= this.thresholds.technicalIntegrity,
+      passed: technicalScore >= thresholds.technicalIntegrity,
       score: technicalScore,
-      message: technicalScore >= this.thresholds.technicalIntegrity
+      message: technicalScore >= thresholds.technicalIntegrity
         ? 'Technical content intact'
         : `Corrupted items: ${this.getCorruptedItems(technicalCheck).join(', ')}`,
       evidence: this.getCorruptedItems(technicalCheck)
@@ -105,9 +113,9 @@ export class VerificationEngine {
     const semanticScore = this.checkSemanticSimilarity(original, compressed, originalAnalysis);
     details.push({
       check: 'semantic_similarity',
-      passed: semanticScore >= this.thresholds.semanticConfidence,
+      passed: semanticScore >= thresholds.semanticConfidence,
       score: semanticScore,
-      message: semanticScore >= this.thresholds.semanticConfidence
+      message: semanticScore >= thresholds.semanticConfidence
         ? 'Semantic meaning preserved'
         : 'Significant semantic drift detected',
       evidence: []
@@ -118,9 +126,9 @@ export class VerificationEngine {
     const privacyScore = this.checkPrivacyCompliance(original, compressed);
     details.push({
       check: 'privacy_compliance',
-      passed: privacyScore >= this.thresholds.privacyConfidence,
+      passed: privacyScore >= thresholds.privacyConfidence,
       score: privacyScore,
-      message: privacyScore >= this.thresholds.privacyConfidence
+      message: privacyScore >= thresholds.privacyConfidence
         ? 'No privacy violations'
         : 'Potential privacy issue detected',
       evidence: []
@@ -155,7 +163,7 @@ export class VerificationEngine {
       ['instruction_preservation', 'constraint_preservation', 'technical_integrity', 'privacy_compliance', 'semantic_similarity'].includes(check)
     );
     
-    const passed = criticalFailedChecks.length === 0 && scores.overall >= this.thresholds.overall;
+    const passed = criticalFailedChecks.length === 0 && scores.overall >= thresholds.overall;
 
     return {
       passed,

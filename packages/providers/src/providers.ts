@@ -5,7 +5,6 @@ import {
   ProviderHealth,
   ProviderCapabilities,
   ProviderStatus,
-  OllamaConfig,
   GroqConfig,
   ProviderType
 } from '@tokentrim/shared';
@@ -27,228 +26,6 @@ export abstract class BaseProvider implements LLMProvider {
 
   protected handleError(error: Error, provider: ProviderType): never {
     throw new Error(`[${provider}] ${error.message}`);
-  }
-}
-
-// ============================================================================
-// Ollama Provider
-// ============================================================================
-
-interface OllamaGenerateRequest {
-  model: string;
-  prompt: string;
-  system?: string;
-  template?: string;
-  context?: number[];
-  stream?: boolean;
-  raw?: boolean;
-  format?: 'json';
-  options?: {
-    temperature?: number;
-    top_p?: number;
-    top_k?: number;
-    num_predict?: number;
-    stop?: string[];
-    num_ctx?: number;
-  };
-}
-
-interface OllamaGenerateResponse {
-  model: string;
-  created_at: string;
-  response: string;
-  done: boolean;
-  context?: number[];
-  total_duration?: number;
-  load_duration?: number;
-  prompt_eval_count?: number;
-  prompt_eval_duration?: number;
-  eval_count?: number;
-  eval_duration?: number;
-}
-
-interface OllamaModel {
-  name: string;
-  modified_at: string;
-  size: number;
-  digest: string;
-  details?: {
-    format: string;
-    family: string;
-    families: string[];
-    parameter_size: string;
-    quantization_level: string;
-  };
-}
-
-interface OllamaTagsResponse {
-  models: OllamaModel[];
-}
-
-export class OllamaProvider extends BaseProvider {
-  name = 'Ollama';
-  type = 'ollama' as ProviderType;
-  
-  private config: OllamaConfig;
-  private status: ProviderStatus = 'unavailable';
-  private lastHealthCheck = 0;
-  private healthCheckCache: ProviderHealth | null = null;
-
-  constructor(config: OllamaConfig) {
-    super();
-    this.config = config;
-  }
-
-  async generate(prompt: string, options: GenerateOptions): Promise<ProviderResponse> {
-    const requestBody: OllamaGenerateRequest = {
-      model: this.config.model,
-      prompt,
-      system: options.systemPrompt,
-      stream: false,
-      format: options.responseFormat === 'json' ? 'json' : undefined,
-      options: {
-        temperature: options.temperature ?? 0.1,
-        num_predict: options.maxTokens,
-        stop: options.stopSequences
-      }
-    };
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.config.timeoutMs);
-
-    try {
-      const response = await fetch(`${this.config.baseUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Ollama API error: ${response.status} ${errorText}`);
-      }
-
-      const data = (await response.json()) as OllamaGenerateResponse;
-
-      return {
-        text: data.response,
-        inputTokens: data.prompt_eval_count || 0,
-        outputTokens: data.eval_count || 0,
-        model: this.config.model,
-        finishReason: data.done ? 'stop' : 'length',
-        metadata: {
-          totalDuration: data.total_duration,
-          loadDuration: data.load_duration,
-          promptEvalDuration: data.prompt_eval_duration,
-          evalDuration: data.eval_duration
-        }
-      };
-    } catch (error) {
-      clearTimeout(timeoutId);
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error('Ollama request timeout');
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      console.error('[TokenTrim] Ollama generate failed:', message);
-      throw error;
-    }
-  }
-
-  async healthCheck(): Promise<ProviderHealth> {
-    const now = Date.now();
-    
-    // Cache health check for 30 seconds
-    if (this.healthCheckCache && now - this.lastHealthCheck < 30000) {
-      return this.healthCheckCache;
-    }
-
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      
-      const start = Date.now();
-      const response = await fetch(`${this.config.baseUrl}/api/tags`, {
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      
-      const latencyMs = Date.now() - start;
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = (await response.json()) as OllamaTagsResponse;
-      const modelName = this.config.model || '';
-      const modelAvailable = data.models.some(m => m.name.startsWith(modelName.split(':')[0] || ''));
-
-      this.status = modelAvailable ? 'available' : 'unavailable';
-      
-      this.healthCheckCache = {
-        healthy: modelAvailable,
-        latencyMs,
-        modelAvailable,
-        lastChecked: now
-      };
-      
-      this.lastHealthCheck = now;
-      return this.healthCheckCache;
-    } catch (error) {
-      this.status = 'unavailable';
-      const message = error instanceof Error ? error.message : String(error);
-      console.error('[TokenTrim] Ollama health check failed:', message);
-      
-      this.healthCheckCache = {
-        healthy: false,
-        error: message,
-        modelAvailable: false,
-        lastChecked: now
-      };
-      
-      this.lastHealthCheck = now;
-      return this.healthCheckCache;
-    }
-  }
-
-  getModel(): string {
-    return this.config.model;
-  }
-
-  getCapabilities(): ProviderCapabilities {
-    return {
-      streaming: true,
-      jsonMode: true,
-      functionCalling: false,
-      maxContextTokens: 8192,
-      supportedModels: ['phi4-mini', 'phi3', 'llama3', 'mistral', 'gemma', 'qwen']
-    };
-  }
-
-  estimateCost(inputTokens: number, outputTokens: number): number {
-    // Local inference - no monetary cost
-    return 0;
-  }
-
-  getStatus(): ProviderStatus {
-    return this.status;
-  }
-
-  async listModels(): Promise<string[]> {
-    try {
-      const response = await fetch(`${this.config.baseUrl}/api/tags`);
-      const data = (await response.json()) as OllamaTagsResponse;
-      return data.models.map(m => m.name);
-    } catch {
-      return [];
-    }
-  }
-
-  updateConfig(config: Partial<OllamaConfig>): void {
-    this.config = { ...this.config, ...config };
-    this.healthCheckCache = null;
   }
 }
 
@@ -314,7 +91,10 @@ export class GroqProvider extends BaseProvider {
 
   constructor(config: GroqConfig) {
     super();
-    this.config = config;
+    this.config = {
+      baseUrl: 'https://api.groq.com/openai/v1',
+      ...config
+    };
   }
 
   async generate(prompt: string, options: GenerateOptions): Promise<ProviderResponse> {
@@ -469,12 +249,19 @@ export class GroqProvider extends BaseProvider {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      this.status = 'available';
+      const data = (await response.json()) as GroqModelsResponse;
+      const modelAvailable = data.data.some(m => m.id === this.config.model);
+
+      if (modelAvailable) {
+        this.status = 'available';
+      } else {
+        this.status = 'unavailable';
+      }
       
       this.healthCheckCache = {
-        healthy: true,
+        healthy: modelAvailable,
         latencyMs,
-        modelAvailable: true,
+        modelAvailable,
         lastChecked: now
       };
       
@@ -503,21 +290,12 @@ export class GroqProvider extends BaseProvider {
       jsonMode: true,
       functionCalling: true,
       maxContextTokens: 32768,
-      supportedModels: ['openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3-27b']
+      supportedModels: [this.config.model]
     };
   }
 
   estimateCost(inputTokens: number, outputTokens: number): number {
-    // Groq pricing (approximate, per 1M tokens)
-    // TODO: Verify current pricing for gpt-oss models from Groq docs
-    const pricing: Record<string, { input: number; output: number }> = {
-      'openai/gpt-oss-20b': { input: 0.10, output: 0.10 },
-      'openai/gpt-oss-120b': { input: 0.50, output: 0.50 },
-      'qwen/qwen3-27b': { input: 0.30, output: 0.30 }
-    };
-    
-    const modelPricing = pricing[this.config.model] || { input: 0.1, output: 0.1 };
-    return (inputTokens * modelPricing.input + outputTokens * modelPricing.output) / 1_000_000;
+    return 0; // Disabled until dynamic pricing feed is implemented
   }
 
   getStatus(): ProviderStatus {
@@ -551,21 +329,14 @@ export class GroqProvider extends BaseProvider {
 // ============================================================================
 
 export interface ProviderFactoryOptions {
-  ollama?: OllamaConfig;
   groq?: GroqConfig;
 }
 
 export class ProviderFactory {
-  private ollamaProvider: OllamaProvider | null = null;
   private groqProvider: GroqProvider | null = null;
 
-  createProviders(options: ProviderFactoryOptions): { ollama?: OllamaProvider; groq?: GroqProvider } {
-    const providers: { ollama?: OllamaProvider; groq?: GroqProvider } = {};
-    
-    if (options.ollama) {
-      this.ollamaProvider = new OllamaProvider(options.ollama);
-      providers.ollama = this.ollamaProvider;
-    }
+  createProviders(options: ProviderFactoryOptions): { groq?: GroqProvider } {
+    const providers: { groq?: GroqProvider } = {};
     
     if (options.groq) {
       this.groqProvider = new GroqProvider(options.groq);
@@ -575,15 +346,11 @@ export class ProviderFactory {
     return providers;
   }
 
-  getOllamaProvider(): OllamaProvider | null {
-    return this.ollamaProvider;
-  }
-
   getGroqProvider(): GroqProvider | null {
     return this.groqProvider;
   }
 
   getAllProviders(): LLMProvider[] {
-    return [this.ollamaProvider, this.groqProvider].filter(Boolean) as LLMProvider[];
+    return [this.groqProvider].filter(Boolean) as LLMProvider[];
   }
 }

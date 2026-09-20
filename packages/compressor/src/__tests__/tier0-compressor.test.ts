@@ -8,8 +8,6 @@ describe('Tier0Compressor', () => {
     targetModel: 'gpt-4',
     maxCompressionRatio: 0.5,
     preserveFormatting: true,
-    allowCloudFallback: false,
-    requireConfirmationForCloud: true
   };
 
   beforeEach(() => {
@@ -24,6 +22,15 @@ describe('Tier0Compressor', () => {
       expect(result).not.toBeNull();
       expect(result!.compressedText).not.toContain('    ');
       expect(result!.compressedText).not.toContain('\n\n\n');
+    });
+
+    it('preserves vertical whitespace between paragraphs and headings', async () => {
+      const text = '## Backend\nUse Node.js\n\n- Express\n- PostgreSQL';
+      const result = await compressor.compress(text, { targetModel: 'gpt-4' });
+      
+      // The newlines should remain intact, not merging to 'BackendUse Node.js'
+      expect(result.compressedText).toContain('## Backend\nUse Node.js');
+      expect(result.compressedText).toContain('Express\n- PostgreSQL');
     });
 
     it('preserves code blocks', async () => {

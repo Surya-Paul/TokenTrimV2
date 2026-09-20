@@ -13,7 +13,7 @@ interface StoredAnalytics extends AnalyticsData {
 }
 
 const STORAGE_KEY = 'tokentrim_analytics';
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2; // Incremented for migration
 
 // Stub localStorage for Node.js environments
 const getLocalStorage = () => {
@@ -58,7 +58,7 @@ export class Telemetry {
     return this.getDefaultAnalytics();
   }
 
-  private migrateAnalytics(data: StoredAnalytics): AnalyticsData {
+  private migrateAnalytics(data: any): AnalyticsData {
     // Handle version migrations here
     return {
       totalPrompts: data.totalPrompts || 0,
@@ -67,12 +67,8 @@ export class Telemetry {
       grossTokensSaved: data.grossTokensSaved || 0,
       compressionOverhead: data.compressionOverhead || 0,
       netTokensSaved: data.netTokensSaved || 0,
-      estimatedMoneySaved: data.estimatedMoneySaved || 0,
-      localCompressionPercentage: data.localCompressionPercentage || 0,
-      cloudCompressionPercentage: data.cloudCompressionPercentage || 0,
       averageLatencyMs: data.averageLatencyMs || 0,
       failureRate: data.failureRate || 0,
-      cloudEscalationRate: data.cloudEscalationRate || 0,
       byProvider: data.byProvider || this.getDefaultProviderAnalytics(),
       byContentType: data.byContentType || this.getDefaultContentTypeAnalytics()
     };
@@ -86,21 +82,16 @@ export class Telemetry {
       grossTokensSaved: 0,
       compressionOverhead: 0,
       netTokensSaved: 0,
-      estimatedMoneySaved: 0,
-      localCompressionPercentage: 0,
-      cloudCompressionPercentage: 0,
       averageLatencyMs: 0,
       failureRate: 0,
-      cloudEscalationRate: 0,
       byProvider: this.getDefaultProviderAnalytics(),
       byContentType: this.getDefaultContentTypeAnalytics()
     };
   }
 
-  private getDefaultProviderAnalytics(): Record<ProviderType, ProviderAnalytics> {
+  private getDefaultProviderAnalytics(): Record<string, ProviderAnalytics> {
     return {
       deterministic: { prompts: 0, originalTokens: 0, optimizedTokens: 0, netSavings: 0, averageLatencyMs: 0, failureCount: 0 },
-      ollama: { prompts: 0, originalTokens: 0, optimizedTokens: 0, netSavings: 0, averageLatencyMs: 0, failureCount: 0 },
       groq: { prompts: 0, originalTokens: 0, optimizedTokens: 0, netSavings: 0, averageLatencyMs: 0, failureCount: 0 }
     };
   }
@@ -143,10 +134,12 @@ export class Telemetry {
     this.data.grossTokensSaved += result.grossReduction;
     this.data.compressionOverhead += result.compressionOverhead;
     this.data.netTokensSaved += result.netSavings;
-    this.data.estimatedMoneySaved += result.estimatedCostSavings;
 
     // Update provider analytics
-    const providerStats = this.data.byProvider[result.provider];
+    if (!this.data.byProvider[result.provider]) {
+      this.data.byProvider[result.provider] = { prompts: 0, originalTokens: 0, optimizedTokens: 0, netSavings: 0, averageLatencyMs: 0, failureCount: 0 };
+    }
+    const providerStats = this.data.byProvider[result.provider]!;
     providerStats.prompts++;
     providerStats.originalTokens += result.originalTokens;
     providerStats.optimizedTokens += result.finalTokens;
@@ -161,7 +154,7 @@ export class Telemetry {
     // In a real implementation, we'd track this from the analysis
     // For now, we'll use a default
     const contentType = 'prose' as ContentType;
-    const contentStats = this.data.byContentType[contentType];
+    const contentStats = this.data.byContentType[contentType]!;
     contentStats.prompts++;
     const reduction = result.originalTokens > 0 ? result.grossReduction / result.originalTokens : 0;
     contentStats.averageReduction = 
@@ -179,27 +172,19 @@ export class Telemetry {
     const total = this.data.totalPrompts;
     if (total === 0) return;
 
-    const localPrompts = this.data.byProvider.deterministic.prompts + this.data.byProvider.ollama.prompts;
-    const cloudPrompts = this.data.byProvider.groq.prompts;
-
-    this.data.localCompressionPercentage = total > 0 ? (localPrompts / total) * 100 : 0;
-    this.data.cloudCompressionPercentage = total > 0 ? (cloudPrompts / total) * 100 : 0;
-
-    const totalLatency = 
-      this.data.byProvider.deterministic.averageLatencyMs * this.data.byProvider.deterministic.prompts +
-      this.data.byProvider.ollama.averageLatencyMs * this.data.byProvider.ollama.prompts +
-      this.data.byProvider.groq.averageLatencyMs * this.data.byProvider.groq.prompts;
+    let totalLatency = 0;
+    let totalFailures = 0;
+    let totalProviderPrompts = 0;
     
-    this.data.averageLatencyMs = total > 0 ? totalLatency / total : 0;
-
-    const totalFailures = 
-      this.data.byProvider.deterministic.failureCount +
-      this.data.byProvider.ollama.failureCount +
-      this.data.byProvider.groq.failureCount;
+    for (const key in this.data.byProvider) {
+      const stats = this.data.byProvider[key]!;
+      totalLatency += stats.averageLatencyMs * stats.prompts;
+      totalFailures += stats.failureCount;
+      totalProviderPrompts += stats.prompts;
+    }
     
+    this.data.averageLatencyMs = totalProviderPrompts > 0 ? totalLatency / totalProviderPrompts : 0;
     this.data.failureRate = total > 0 ? (totalFailures / total) * 100 : 0;
-
-    this.data.cloudEscalationRate = total > 0 ? (cloudPrompts / total) * 100 : 0;
   }
 
   getAnalytics(): AnalyticsData {
@@ -286,12 +271,8 @@ export class ServerTelemetry {
       grossTokensSaved: data.grossTokensSaved || 0,
       compressionOverhead: data.compressionOverhead || 0,
       netTokensSaved: data.netTokensSaved || 0,
-      estimatedMoneySaved: data.estimatedMoneySaved || 0,
-      localCompressionPercentage: data.localCompressionPercentage || 0,
-      cloudCompressionPercentage: data.cloudCompressionPercentage || 0,
       averageLatencyMs: data.averageLatencyMs || 0,
       failureRate: data.failureRate || 0,
-      cloudEscalationRate: data.cloudEscalationRate || 0,
       byProvider: data.byProvider || this.getDefaultProviderAnalytics(),
       byContentType: data.byContentType || this.getDefaultContentTypeAnalytics()
     };
@@ -305,21 +286,16 @@ export class ServerTelemetry {
       grossTokensSaved: 0,
       compressionOverhead: 0,
       netTokensSaved: 0,
-      estimatedMoneySaved: 0,
-      localCompressionPercentage: 0,
-      cloudCompressionPercentage: 0,
       averageLatencyMs: 0,
       failureRate: 0,
-      cloudEscalationRate: 0,
       byProvider: this.getDefaultProviderAnalytics(),
       byContentType: this.getDefaultContentTypeAnalytics()
     };
   }
 
-  private getDefaultProviderAnalytics(): Record<ProviderType, ProviderAnalytics> {
+  private getDefaultProviderAnalytics(): Record<string, ProviderAnalytics> {
     return {
       deterministic: { prompts: 0, originalTokens: 0, optimizedTokens: 0, netSavings: 0, averageLatencyMs: 0, failureCount: 0 },
-      ollama: { prompts: 0, originalTokens: 0, optimizedTokens: 0, netSavings: 0, averageLatencyMs: 0, failureCount: 0 },
       groq: { prompts: 0, originalTokens: 0, optimizedTokens: 0, netSavings: 0, averageLatencyMs: 0, failureCount: 0 }
     };
   }
@@ -364,9 +340,11 @@ export class ServerTelemetry {
     this.data.grossTokensSaved += result.grossReduction;
     this.data.compressionOverhead += result.compressionOverhead;
     this.data.netTokensSaved += result.netSavings;
-    this.data.estimatedMoneySaved += result.estimatedCostSavings;
 
-    const providerStats = this.data.byProvider[result.provider];
+    if (!this.data.byProvider[result.provider]) {
+      this.data.byProvider[result.provider] = { prompts: 0, originalTokens: 0, optimizedTokens: 0, netSavings: 0, averageLatencyMs: 0, failureCount: 0 };
+    }
+    const providerStats = this.data.byProvider[result.provider]!;
     providerStats.prompts++;
     providerStats.originalTokens += result.originalTokens;
     providerStats.optimizedTokens += result.finalTokens;
@@ -385,26 +363,19 @@ export class ServerTelemetry {
     const total = this.data.totalPrompts;
     if (total === 0) return;
 
-    const localPrompts = this.data.byProvider.deterministic.prompts + this.data.byProvider.ollama.prompts;
-    const cloudPrompts = this.data.byProvider.groq.prompts;
-
-    this.data.localCompressionPercentage = total > 0 ? (localPrompts / total) * 100 : 0;
-    this.data.cloudCompressionPercentage = total > 0 ? (cloudPrompts / total) * 100 : 0;
-
-    const totalLatency = 
-      this.data.byProvider.deterministic.averageLatencyMs * this.data.byProvider.deterministic.prompts +
-      this.data.byProvider.ollama.averageLatencyMs * this.data.byProvider.ollama.prompts +
-      this.data.byProvider.groq.averageLatencyMs * this.data.byProvider.groq.prompts;
+    let totalLatency = 0;
+    let totalFailures = 0;
+    let totalProviderPrompts = 0;
     
-    this.data.averageLatencyMs = total > 0 ? totalLatency / total : 0;
-
-    const totalFailures = 
-      this.data.byProvider.deterministic.failureCount +
-      this.data.byProvider.ollama.failureCount +
-      this.data.byProvider.groq.failureCount;
+    for (const key in this.data.byProvider) {
+      const stats = this.data.byProvider[key]!;
+      totalLatency += stats.averageLatencyMs * stats.prompts;
+      totalFailures += stats.failureCount;
+      totalProviderPrompts += stats.prompts;
+    }
     
+    this.data.averageLatencyMs = totalProviderPrompts > 0 ? totalLatency / totalProviderPrompts : 0;
     this.data.failureRate = total > 0 ? (totalFailures / total) * 100 : 0;
-    this.data.cloudEscalationRate = total > 0 ? (cloudPrompts / total) * 100 : 0;
   }
 
   getAnalytics(): AnalyticsData {

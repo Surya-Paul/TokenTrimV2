@@ -127,6 +127,26 @@ describe('InputAnalyzer', () => {
     });
   });
 
+  describe('SQL Identifier Detection', () => {
+    it('ignores "Create", "Update", "Delete", "Select" in ordinary prose', async () => {
+      const text = 'Create a new file. Update the database. Delete the old records. Select the best option.';
+      const result = await analyzer.analyze(text);
+      expect(result.protectedSegments.some(s => s.type === 'sql_identifier')).toBe(false);
+    });
+
+    it('protects SQL keywords in actual SQL queries', async () => {
+      const text = 'SELECT * FROM users WHERE id = 1';
+      const result = await analyzer.analyze(text);
+      expect(result.protectedSegments.some(s => s.type === 'sql_identifier')).toBe(true);
+    });
+
+    it('protects SQL keywords in coding prompts containing inline SQL', async () => {
+      const text = 'Write a function that executes SELECT id, name FROM employees WHERE department = "Sales"';
+      const result = await analyzer.analyze(text);
+      expect(result.protectedSegments.some(s => s.type === 'sql_identifier')).toBe(true);
+    });
+  });
+
   describe('Protected Segment Detection', () => {
     it('detects code blocks', async () => {
       const text = '```js\nconst x = 1;\n```';
@@ -165,6 +185,40 @@ describe('InputAnalyzer', () => {
       const text = 'Do not delete the file';
       const result = await analyzer.analyze(text);
       expect(result.protectedSegments.some(s => s.type === 'negative_instruction')).toBe(true);
+    });
+
+    it('detects legitimate regex patterns', async () => {
+      const text1 = 'Match this with /^[a-zA-Z]+$/i';
+      const text2 = 'Use /\\d{3}-\\d{4}/g for phone numbers';
+      
+      const res1 = await analyzer.analyze(text1);
+      const res2 = await analyzer.analyze(text2);
+      
+      expect(res1.protectedSegments.some(s => s.type === 'regex')).toBe(true);
+      expect(res2.protectedSegments.some(s => s.type === 'regex')).toBe(true);
+    });
+
+    it('ignores false-positive regex patterns', async () => {
+      const text = 'The marking/updating process for the UI/UX is done.';
+      const result = await analyzer.analyze(text);
+      
+      expect(result.protectedSegments.some(s => s.type === 'regex')).toBe(false);
+    });
+
+    it('ignores paths as regex patterns', async () => {
+      const text = 'Edit the file at /usr/bin/local';
+      const result = await analyzer.analyze(text);
+      
+      // Should detect file_path but not regex
+      expect(result.protectedSegments.some(s => s.type === 'file_path')).toBe(true);
+      expect(result.protectedSegments.some(s => s.type === 'regex')).toBe(false);
+    });
+
+    it('handles a complex false-positive Student Assistance System prompt', async () => {
+      const text = 'Develop a Student Assistance System. It handles grading/marking/updating. The UI/UX should be clean. Do not use /old/path.';
+      const result = await analyzer.analyze(text);
+      
+      expect(result.protectedSegments.some(s => s.type === 'regex')).toBe(false);
     });
   });
 

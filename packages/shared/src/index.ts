@@ -25,13 +25,13 @@ export const ContentTypeSchema = z.enum([
 
 export type ContentType = z.infer<typeof ContentTypeSchema>;
 
-export const CompressionTierSchema = z.enum(['tier0', 'local_ai', 'cloud_ai']);
+export const CompressionTierSchema = z.enum(['tier0', 'deterministic', 'cloud_ai']);
 export type CompressionTier = z.infer<typeof CompressionTierSchema>;
 
-export const ProviderTypeSchema = z.enum(['ollama', 'groq', 'deterministic']);
+export const ProviderTypeSchema = z.enum(['groq', 'deterministic']);
 export type ProviderType = z.infer<typeof ProviderTypeSchema>;
 
-export const ProcessingModeSchema = z.enum(['local', 'cloud', 'hybrid']);
+export const ProcessingModeSchema = z.enum(['server', 'cloud']);
 export type ProcessingMode = z.infer<typeof ProcessingModeSchema>;
 
 export const SafetyCheckTypeSchema = z.enum([
@@ -162,20 +162,30 @@ export interface CompressionResult {
   grossReduction: number;
   compressionOverhead: number;
   netSavings: number;
-  estimatedCostSavings: number;
   provider: ProviderType;
   mode: ProcessingMode;
+  forcedTargetResult?: boolean;
 }
 
 export interface CompressionOptions {
   targetModel: TargetModel;
+  /** The selected UX preset, used to select and rank safe candidates. */
+  compressionTarget?: CompressionTarget;
+  /** Desired output-token reduction. This is a safety-bounded target, not a guarantee. */
+  targetReductionRatio?: number;
+  /** Lower bound used when deciding whether the requested target was achieved. */
+  minimumReductionRatio?: number;
+  /** Upper bound used to avoid selecting an unnecessarily over-compressed result. */
+  maximumReductionRatio?: number;
   maxCompressionRatio?: number;
   preserveFormatting?: boolean;
-  allowCloudFallback?: boolean;
-  requireConfirmationForCloud?: boolean;
   verificationThresholds?: VerificationThresholds;
-  forceCloud?: boolean;
-  forceLocal?: boolean;
+  /**
+   * When true (default), return the safest verified result even if it falls
+   * outside the selected target range. When false, reject the result if no
+   * verified candidate lands inside the target range.
+   */
+  safeResultMode?: boolean;
 }
 
 // ============================================================================
@@ -297,13 +307,6 @@ export interface ProviderCapabilities {
 
 export type ProviderStatus = 'available' | 'unavailable' | 'loading' | 'error' | 'rate_limited' | 'quota_exceeded';
 
-export interface OllamaConfig {
-  baseUrl: string;
-  model: string;
-  timeoutMs: number;
-  keepAlive?: string;
-}
-
 export interface GroqConfig {
   apiKey: string;
   model: string;
@@ -334,51 +337,24 @@ export interface DetectedSecret {
 
 export interface PrivacySettings {
   neverSendSecrets: boolean;
-  allowCloudProcessing: boolean;
-  requireCloudConfirmation: boolean;
   maskSecretsInLogs: boolean;
-  localOnlyMode: boolean;
 }
 
 // ============================================================================
-// Settings Types
+// Settings Types (Web Client)
 // ============================================================================
 
 export interface AppSettings {
   general: GeneralSettings;
-  ai: AISettings;
-  cloud: CloudSettings;
   privacy: PrivacySettings;
   targetModel: TargetModelSettings;
   advanced: AdvancedSettings;
 }
 
 export interface GeneralSettings {
-  enabled: boolean;
-  globalHotkey: string;
-  compressionTarget: 'balanced' | 'aggressive' | 'conservative';
-  previewMode: boolean;
-  autoStart: boolean;
-  minimizeToTray: boolean;
+  compressionTarget: CompressionTarget;
+  safeResultMode: boolean;
   theme: 'light' | 'dark' | 'system';
-  compressionMode: 'local' | 'cloud' | 'auto';
-}
-
-export interface AISettings {
-  localEnabled: boolean;
-  provider: 'ollama';
-  model: string;
-  endpoint: string;
-  timeoutMs: number;
-}
-
-export interface CloudSettings {
-  fallbackEnabled: boolean;
-  provider: 'groq';
-  model: string;
-  apiKey: string; // encrypted in storage
-  timeoutMs: number;
-  maxRetries: number;
 }
 
 export interface TargetModelSettings {
@@ -388,7 +364,6 @@ export interface TargetModelSettings {
 
 export interface AdvancedSettings {
   timeouts: {
-    ollama: number;
     groq: number;
     verification: number;
   };
@@ -409,14 +384,10 @@ export interface AnalyticsData {
   grossTokensSaved: number;
   compressionOverhead: number;
   netTokensSaved: number;
-  estimatedMoneySaved: number;
-  localCompressionPercentage: number;
-  cloudCompressionPercentage: number;
   averageLatencyMs: number;
   failureRate: number;
-  cloudEscalationRate: number;
-  byProvider: Record<ProviderType, ProviderAnalytics>;
-  byContentType: Record<ContentType, ContentTypeAnalytics>;
+  byProvider: Record<string, ProviderAnalytics>;
+  byContentType: Record<string, ContentTypeAnalytics>;
 }
 
 export interface ProviderAnalytics {
@@ -556,23 +527,126 @@ export class PrivacyError extends TokenTrimError {
 }
 
 // ============================================================================
-// IPC Types (Electron)
+// API Request/Response Types
 // ============================================================================
 
-export interface IPCChannels {
-  'compress:request': (payload: CompressionRequest) => Promise<CompressionResponse>;
-  'compress:cancel': () => void;
-  'settings:get': () => Promise<AppSettings>;
-  'settings:set': (settings: Partial<AppSettings>) => Promise<void>;
-  'settings:reset': () => Promise<void>;
-  'analytics:get': () => Promise<AnalyticsData>;
-  'benchmark:run': (options: BenchmarkRunOptions) => Promise<BenchmarkReport>;
-  'provider:health': (provider: ProviderType) => Promise<ProviderHealth>;
-  'provider:models': (provider: ProviderType) => Promise<string[]>;
-  'privacy:scan': (text: string) => Promise<SecretDetectionResult>;
-  'app:version': () => string;
-  'app:quit': () => void;
+export const CompressionTargetSchema = z.enum(['conservative', 'balanced', 'aggressive', 'extreme']);
+export type CompressionTarget = z.infer<typeof CompressionTargetSchema>;
+
+/**
+ * Output-token reduction presets. The lower and upper bounds deliberately
+ * leave a small tolerance: exact percentages are not always safe for prompts
+ * containing code, identifiers, or explicit constraints.
+ */
+export const COMPRESSION_TARGETS: Record<CompressionTarget, {
+  label: string;
+  targetReductionRatio: number;
+  minimumReductionRatio: number;
+  maximumReductionRatio: number;
+  description: string;
+}> = {
+  conservative: {
+    label: 'Conservative',
+    targetReductionRatio: 0.20,
+    minimumReductionRatio: 0.17,
+    maximumReductionRatio: 0.23,
+    description: 'Aim for 20% reduction while retaining nearly all phrasing.'
+  },
+  balanced: {
+    label: 'Balanced',
+    targetReductionRatio: 0.35,
+    minimumReductionRatio: 0.30,
+    maximumReductionRatio: 0.40,
+    description: 'Aim for 35% reduction with concise wording.'
+  },
+  aggressive: {
+    label: 'Aggressive',
+    targetReductionRatio: 0.50,
+    minimumReductionRatio: 0.45,
+    maximumReductionRatio: 0.55,
+    description: 'Aim for 50% reduction while preserving every requirement.'
+  },
+  extreme: {
+    label: 'Extreme',
+    targetReductionRatio: 0.75,
+    minimumReductionRatio: 0.68,
+    maximumReductionRatio: 0.80,
+    description: 'Aim for 75% reduction; complex or protected prompts may safely reduce less.'
+  }
+};
+
+export const ApiCompressionRequestSchema = z.object({
+  text: z.string().min(1, 'Text is required').max(100_000, 'Text too large'),
+  targetModel: TargetModelSchema.default('gpt-4'),
+  compressionTarget: CompressionTargetSchema.default('balanced'),
+  safeResultMode: z.boolean().default(true)
+});
+export type ApiCompressionRequest = z.infer<typeof ApiCompressionRequestSchema>;
+
+export interface ApiCompressionResponse {
+  success: boolean;
+  data: {
+    compressedText: string;
+    originalTokens: number;
+    compressedTokens: number;
+    grossReduction: number;
+    compressionOverhead: number;
+    netSavings: number;
+    provider: ProviderType;
+    tier: CompressionTier;
+    safetyScores: SafetyScores;
+    processingTimeMs: number;
+    accepted: boolean;
+    rejectionReason?: string;
+    compressionTarget?: CompressionTarget;
+    targetReductionPercent?: number;
+    actualReductionPercent?: number;
+    targetAchieved?: boolean;
+    safeResultMode?: boolean;
+    forcedTargetResult?: boolean;
+  } | null;
+  error?: ApiError;
 }
+
+export const ApiPrivacyScanRequestSchema = z.object({
+  text: z.string().min(1, 'Text is required').max(100_000, 'Text too large')
+});
+export type ApiPrivacyScanRequest = z.infer<typeof ApiPrivacyScanRequestSchema>;
+
+export interface ApiPrivacyScanResponse {
+  hasSecrets: boolean;
+  riskLevel: SecretDetectionResult['riskLevel'];
+  secretTypes: string[];
+  secretCount: number;
+}
+
+export interface ApiHealthResponse {
+  status: 'ok' | 'degraded' | 'error';
+  version: string;
+  providers: {
+    groq: ProviderHealth;
+  };
+}
+
+export interface ApiError {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export const API_ERROR_CODES = {
+  SECRETS_DETECTED: 'SECRETS_DETECTED',
+  INPUT_TOO_LARGE: 'INPUT_TOO_LARGE',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  PROVIDER_ERROR: 'PROVIDER_ERROR',
+  TIMEOUT: 'TIMEOUT',
+  RATE_LIMITED: 'RATE_LIMITED',
+  INTERNAL_ERROR: 'INTERNAL_ERROR'
+} as const;
+
+// ============================================================================
+// Legacy Compat Types (used by CompressionRequest in core engine)
+// ============================================================================
 
 export interface CompressionRequest {
   text: string;

@@ -82,7 +82,7 @@ export class Tier0Compressor {
     processed = processed
       .replace(/[ \t]+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
-      .replace(/^\s+|\s+$/gm, '')
+      .replace(/^[ \t]+|[ \t]+$/gm, '')
       .trim();
     
     // Restore code blocks

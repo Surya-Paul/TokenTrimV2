@@ -2,9 +2,7 @@ import {
   Tokenizer,
   TokenizerConfig,
   TokenCountResult,
-  TargetModel,
-  TargetModelSchema,
-  ProviderType
+  TargetModel
 } from '@tokentrim/shared';
 import { TiktokenTokenizer } from './tiktoken-tokenizer';
 import { GenericEstimator } from './generic-estimator';

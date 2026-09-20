@@ -106,17 +106,6 @@ b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
       const canSend = detector.canSendToCloud(text);
       expect(canSend.allowed).toBe(true);
     });
-
-    it('blocks cloud in local-only mode', () => {
-      const localSettings: PrivacySettings = {
-        ...createDefaultPrivacySettings(),
-        localOnlyMode: true
-      };
-      detector.updateSettings(localSettings);
-      const canSend = detector.canSendToCloud('normal text');
-      expect(canSend.allowed).toBe(false);
-      expect(canSend.reason).toContain('Local-only mode');
-    });
   });
 
   describe('Risk Levels', () => {

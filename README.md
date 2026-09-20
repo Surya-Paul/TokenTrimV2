@@ -1,277 +1,67 @@
 # TokenTrim
 
-**A model-aware, local-first LLM input optimization engine that reduces input tokens and cost while preserving user intent, instructions, constraints, technical content, and semantic meaning.**
+TokenTrim is a model-aware, deterministic and AI-powered prompt compression engine for LLMs. It safely reduces your API costs without losing context.
 
-> **SAFE compression is more important than maximum compression.**
-
-## Features
-
-### 🔒 Local-First Privacy
-- **Phi-4-mini via Ollama** runs entirely on your machine
-- No data leaves your device unless you explicitly enable cloud fallback
-- Automatic secret detection blocks API keys, tokens, and credentials from cloud processing
-- Keys stored securely in system keychain (keytar)
-
-### 🎯 Smart Compression Pipeline
-```
-Input → Analyzer → Tier 0 (deterministic) → Phi-4-mini (local) → Verification → Output
-                              ↓
-                    Groq (cloud fallback, optional)
-```
-
-### 🛡️ Safety Guarantees
-- **Instruction Preservation**: `must`, `should`, `required`, `exactly`, `only`, `never`, `don't`, `do not`, `without`, `unless` - never removed
-- **Constraint Preservation**: Exact counts, formats, technologies, versions, file names - verified
-- **Technical Integrity**: Code blocks, URLs, identifiers, numbers, paths - byte-for-byte preserved
-- **Semantic Verification**: Multi-layer validation before accepting any compression
-- **NET Token Savings**: Accounts for AI compression overhead (input + output tokens)
-
-### 📊 Target-Model-Aware Tokenization
-- GPT-4 / GPT-3.5 (exact via tiktoken)
-- Claude 3 (Opus, Sonnet, Haiku)
-- Gemini Pro / 1.5 Pro
-- Llama 3 (70B, 8B)
-- Qwen 2.5
-- Phi-4-mini
-- Generic estimator for others
-
-### ⚡ Performance
-- Tier 0: <10ms for most prompts
-- Phi-4-mini local: 100-300ms typical
-- Groq cloud: 50-200ms typical
-
-## Quick Start
-
-### Prerequisites
-- Node.js 20+
-- pnpm 9+
-
-### Local AI Setup (Required)
-
-```bash
-# Install Ollama
-brew install ollama  # macOS
-# or download from https://ollama.ai
-
-# Pull Phi-4-mini
-ollama pull phi4-mini
-
-# Start Ollama server
-ollama serve
-```
-
-### Installation
-
-```bash
-# Clone and install
-git clone https://github.com/tokentrim/tokentrim.git
-cd tokentrim
-pnpm install
-
-# Development
-pnpm dev
-
-# Build
-pnpm build:all
-
-# Run desktop app
-pnpm --filter @tokentrim/desktop dev
-```
-
-### Cloud Fallback (Optional)
-
-Get a free API key from [Groq Console](https://console.groq.com) and add it in Settings → Cloud AI.
-
-## Usage
-
-### Global Hotkey
-Press `Cmd+Shift+T` (Mac) / `Ctrl+Shift+T` (Win/Linux) to compress clipboard content.
-
-### Manual Compression
-1. Open TokenTrim
-2. Paste your prompt in the left panel
-3. Select target model (GPT-4, Claude, etc.)
-4. Click "Optimize"
-5. Copy the compressed result
-
-### Settings
-- **General**: Hotkey, compression target, preview mode
-- **Local AI**: Ollama endpoint, model, timeout
-- **Cloud**: Groq API key, model, fallback settings
-- **Privacy**: Secret handling, cloud confirmation, local-only mode
-- **Target Model**: Tokenizer for accurate counting
-- **Advanced**: Verification thresholds, logging, diagnostics
+TokenTrim ensures **SAFE compression** by rigorously verifying that instructions, constraints, technical details, and semantic meaning are preserved.
 
 ## Architecture
 
-```
-TokenTrim/
-├── apps/desktop/           # Electron app (main, renderer, preload)
-├── packages/
-│   ├── core/               # Main orchestration engine
-│   ├── analyzer/           # Input analysis (content type, semantics)
-│   ├── compressor/         # Tier 0 + AI compression
-│   ├── tokenizer/          # Multi-model tokenizer registry
-│   ├── verifier/           # Safety verification engine
-│   ├── providers/          # Ollama + Groq providers
-│   ├── privacy/            # Secret detection & privacy
-│   ├── telemetry/          # Local analytics
-│   └── shared/             # Types & utilities
-├── tests/                  # Unit, integration, security, regression
-├── benchmarks/             # Benchmark framework & test cases
-└── docs/                   # Documentation
-```
+TokenTrim consists of two parts:
+1. **API Server (`apps/api`)**: A Fastify REST API that runs the TokenTrim core engine.
+2. **Web Client (`apps/web`)**: A React + Vite web application for interacting with the engine.
 
-## Compression Pipeline
+## Features
 
-### 1. Input Analysis
-- Content type detection (code, SQL, JSON, Markdown, etc.)
-- Semantic component extraction (objectives, instructions, constraints)
-- Protected segment identification (code, URLs, secrets, identifiers)
-- Complexity assessment
+- **Tier 0 Deterministic Compression**: Fast, rule-based compression that safely removes whitespace, redundant phrases, and compresses lists.
+- **Cloud AI Compression (Groq)**: High-speed semantic compression via Groq.
+- **Verification Engine**: Multi-layer safety checks before accepting any compression to ensure technical integrity.
+- **Privacy First**: Built-in secret detection to block API calls if sensitive information is detected.
 
-### 2. Tier 0 Deterministic Compression
-- Whitespace normalization
-- Redundant phrase removal ("please could you" → "")
-- List compression ("A, B, and C" → "A, B, C")
-- Punctuation normalization
-- Filler word removal (basically, actually, literally)
-- Abbreviations (for example → e.g., that is → i.e.)
-- **Zero AI overhead**, **zero privacy risk**
+## Getting Started
 
-### 3. AI Semantic Compression (Phi-4-mini / Groq)
-- Candidate generation (minimal, moderate, aggressive)
-- System prompt enforces preservation rules
-- Never answers the prompt - only compresses
+1. Clone the repository
+2. Install dependencies: `pnpm install`
+3. Configure the API:
+   - Copy `apps/api/.env.example` to `apps/api/.env`
+   - Set your `GROQ_API_KEY`
+4. Configure the Web Client:
+   - Copy `apps/web/.env.example` to `apps/web/.env`
+5. Build all packages: `pnpm build`
+6. Run the development server: `pnpm dev`
+   - This starts both the API (port 3001) and Web Client (port 5173).
 
-### 4. Verification Engine
-- Instruction preservation check
-- Constraint preservation check
-- Technical integrity verification
-- Semantic similarity scoring
-- Privacy compliance check
+> **Never commit `.env` files.** They contain secrets and are listed in `.gitignore`.
 
-### 5. Acceptance Decision
-- All safety scores above thresholds
-- NET token savings positive
-- Best candidate selected (prefers local > cloud, higher savings > lower)
+## Production Deployment
 
-## NET Token Savings Calculation
+### API Server
 
-```
-Original Tokens: 1,000
-Compressed Tokens: 650
-Gross Reduction: 350 (35%)
+1. Set environment variables (see `apps/api/.env.example` for the full list):
+   - `GROQ_API_KEY` — required
+   - `CORS_ORIGIN` — must match your deployed web client URL
+   - `NODE_ENV=production`
+2. Start: `node apps/api/dist/server.js`
 
-AI Compression Overhead:
-  - Phi-4-mini input: 80 tokens
-  - Phi-4-mini output: 120 tokens
-  Total Overhead: 200 tokens
+### Web Client
 
-NET Savings: 350 - 200 = 150 tokens (15%)
-Estimated Cost Savings: $0.0003 (at $2/1M tokens)
-```
+1. Set `VITE_API_URL` in `apps/web/.env` to your deployed API URL **before building**.
+2. Build: `cd apps/web && pnpm build`
+3. Deploy the `apps/web/dist` folder to any static host (Vercel, Netlify, Cloudflare Pages, S3, etc.).
 
-## Security
+See [docs/deployment.md](docs/deployment.md) for full details.
 
-### Electron Hardening
-- `contextIsolation: true`
-- `nodeIntegration: false`
-- `sandbox: true`
-- Restrictive CSP
-- Secure IPC with allowlisted channels
-- Navigation restrictions
-- No remote content
+## Documentation
 
-### Secret Handling
-- Automatic detection of API keys, JWTs, AWS credentials, private keys, DB URLs
-- Blocks cloud processing when secrets detected
-- Keys stored in OS keychain via keytar
-- Never logged, never sent to renderer
-
-## Benchmarking
-
-```bash
-# Run benchmark suite
-pnpm benchmark
-
-# Run specific categories
-pnpm benchmark -- --cat=coding_prompts,adversarial_prompts
-
-# Run with limit
-pnpm benchmark -- --limit=50
-```
-
-Categories: normal_prompts, coding_prompts, debugging_prompts, long_prompts, sql, json, logs, markdown, mathematics, technical_documentation, creative_prompts, multi_step_instructions, constraint_heavy_prompts, adversarial_prompts
-
-## Development
-
-### Project Structure
-```bash
-# Add a new package
-mkdir packages/new-package
-# Create package.json, tsconfig.json, src/index.ts
-
-# Run tests
-pnpm test              # All tests
-pnpm test:unit         # Unit only
-pnpm test:integration  # Integration only
-pnpm test:security     # Security tests
-
-# Lint & Typecheck
-pnpm lint
-pnpm typecheck
-
-# Build all
-pnpm build:all
-```
-
-### Adding a New Test Case
-1. Add to `packages/benchmarks/src/test-cases.ts`
-2. Include `mustPreserve` and `mustNotContain` arrays
-3. Run `pnpm benchmark` to verify
-
-## Configuration
-
-### Environment Variables
-```bash
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=phi4-mini
-GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.1-8b-instant
-```
-
-### Settings File
-Stored in platform-appropriate config directory:
-- macOS: `~/Library/Application Support/TokenTrim`
-- Windows: `%APPDATA%\TokenTrim`
-- Linux: `~/.config/TokenTrim`
-
-## Troubleshooting
-
-### Ollama Not Detected
-1. Ensure `ollama serve` is running
-2. Check Settings → Local AI → Endpoint matches (default: http://localhost:11434)
-3. Verify model: `ollama list` should show `phi4-mini`
-
-### Compression Rejected
-- Check Safety Indicators in result panel
-- Lower verification thresholds in Advanced settings
-- Try "Conservative" compression target
-
-### Groq Errors
-- Verify API key in Settings → Cloud
-- Check rate limits at console.groq.com
-- Ensure model name matches available models
+| Topic | Link |
+|-------|------|
+| Architecture | [docs/architecture.md](docs/architecture.md) |
+| Development | [docs/development.md](docs/development.md) |
+| Deployment | [docs/deployment.md](docs/deployment.md) |
+| Security | [docs/security.md](docs/security.md) |
+| Privacy | [docs/privacy.md](docs/privacy.md) |
+| Groq Setup | [docs/groq.md](docs/groq.md) |
+| Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Credits
-
-- **Phi-4-mini** by Microsoft Research
-- **Ollama** for local model serving
-- **Groq** for fast cloud inference
-- **Tiktoken** for GPT tokenization
-- **Electron** for desktop framework
+MIT

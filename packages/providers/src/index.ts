@@ -1,6 +1,5 @@
 export {
   BaseProvider,
-  OllamaProvider,
   GroqProvider,
   ProviderFactory,
   type ProviderFactoryOptions
@@ -12,6 +11,5 @@ export type {
   ProviderHealth,
   ProviderCapabilities,
   ProviderStatus,
-  OllamaConfig,
   GroqConfig
 } from '@tokentrim/shared';
