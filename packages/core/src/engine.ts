@@ -48,6 +48,7 @@ interface PipelineContext {
   tier0Candidate: CompressionCandidate | null;
   aiCandidates: CompressionCandidate[];
   bestCandidate: CompressionCandidate | null;
+  fallbackCandidate: CompressionCandidate | null;
   bestCandidatePassed: boolean;
   forcedTargetResult?: boolean;
   verificationResult: import('@tokentrim/verifier').VerificationResult | null;
@@ -112,6 +113,7 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
       tier0Candidate: null,
       aiCandidates: [],
       bestCandidate: null,
+      fallbackCandidate: null,
       bestCandidatePassed: false,
       verificationResult: null,
       mode: 'server',
@@ -121,6 +123,32 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
     // Determine mode early to pick correct deadline
     const isForceTargetMode = options.safeResultMode === false;
     const deadlineMs = isForceTargetMode ? FORCE_TARGET_DEADLINE_MS : OVERALL_DEADLINE_MS;
+
+    // Map compression target to numeric ratios if not explicitly provided
+    if (options.compressionTarget && options.targetReductionRatio === undefined) {
+      const targetMap: Record<string, number> = {
+        conservative: 0.20,
+        balanced: 0.35,
+        aggressive: 0.50,
+        extreme: 0.75
+      };
+      const boundsMap: Record<string, [number, number]> = {
+        conservative: [0.17, 0.23],
+        balanced: [0.30, 0.40],
+        aggressive: [0.45, 0.55],
+        extreme: [0.68, 0.80]
+      };
+      
+      options.targetReductionRatio = targetMap[options.compressionTarget] || 0.35;
+      const bounds = boundsMap[options.compressionTarget] || [0.30, 0.40];
+      
+      if (options.minimumReductionRatio === undefined) {
+        options.minimumReductionRatio = bounds[0];
+      }
+      if (options.maximumReductionRatio === undefined) {
+        options.maximumReductionRatio = bounds[1];
+      }
+    }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), deadlineMs);
@@ -147,18 +175,32 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
       // Step 3: Tier 0 deterministic compression (Server-side)
       context.tier0Candidate = await this.tier0Compressor.compress(text, options);
       
-      if (context.tier0Candidate) {
-        const tier0Verified = await this.verifyCandidate(context, context.tier0Candidate);
+      let bestDeterministic: CompressionCandidate | null = context.tier0Candidate;
+      const proseFallback = this.deterministicProseCompressionFallback(context);
+      
+      if (proseFallback) {
+         // Prefer proseFallback if tier0 doesn't exist, or if it provides better net savings (while being deterministic)
+         if (!bestDeterministic || proseFallback.netTokenSavings > bestDeterministic.netTokenSavings) {
+             bestDeterministic = proseFallback;
+         }
+      }
+
+      if (bestDeterministic) {
+        const verified = await this.verifyCandidate(context, bestDeterministic);
         if (isForceTargetMode) {
-          if (this.isInTargetRange(context.tier0Candidate, context.originalTokens, options)) {
-            context.bestCandidate = context.tier0Candidate;
+          // Even if it's not in target range, we keep it as fallbackCandidate
+          context.fallbackCandidate = bestDeterministic;
+          if (this.isInTargetRange(bestDeterministic, context.originalTokens, options)) {
+            context.bestCandidate = bestDeterministic;
             context.bestCandidatePassed = true;
-            context.forcedTargetResult = !tier0Verified.passed;
+            context.forcedTargetResult = !verified.passed;
             context.mode = 'server';
           }
         } else {
-          if (tier0Verified.passed) {
-            context.bestCandidate = context.tier0Candidate;
+          if (verified.passed) {
+            bestDeterministic.safetyScores = verified.scores;
+            context.fallbackCandidate = bestDeterministic;
+            context.bestCandidate = bestDeterministic;
             context.bestCandidatePassed = true;
             context.mode = 'server';
           }
@@ -190,6 +232,7 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
             if (isForceTargetMode) {
               // Force Target Mode: Must be in target range. Verification is NOT a blocker.
               if (this.isInTargetRange(candidate, context.originalTokens, options)) {
+                candidate.safetyScores = verified.scores; // Update with accurate scores
                 if (this.isBetterCandidate(candidate, context.bestCandidate, context.originalTokens, options)) {
                   context.bestCandidate = candidate;
                   context.bestCandidatePassed = true;
@@ -199,6 +242,7 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
             } else {
               // Safe Result Mode: MUST pass verification to be accepted (even if it's a fallback)
               if (verified.passed) {
+                candidate.safetyScores = verified.scores; // Update with rigorous verification scores!
                 if (this.isBetterCandidate(candidate, context.bestCandidate, context.originalTokens, options)) {
                   context.bestCandidate = candidate;
                   context.bestCandidatePassed = true;
@@ -215,6 +259,25 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
         }
       }
 
+      // Step 4b: Fallbacks
+      if (context.cloudError && !context.bestCandidate && context.fallbackCandidate) {
+        // AI failed, but we have a valid deterministic fallback
+        context.bestCandidate = context.fallbackCandidate;
+        context.bestCandidatePassed = true;
+        context.mode = 'server';
+        if (isForceTargetMode) {
+           context.forcedTargetResult = true;
+        }
+      } else if (isForceTargetMode && !context.bestCandidate) {
+        // When Force Target Mode has no in-range candidate, fall back to the best
+        // shorter result so we never return "No candidates generated."
+        context.bestCandidate = this.selectForceTargetFallback(context, options);
+        if (context.bestCandidate) {
+          context.bestCandidatePassed = true;
+          context.forcedTargetResult = true;
+        }
+      }
+
       // Step 5: Final acceptance check
       const finalResult = await this.buildResult(context, startTime);
       
@@ -224,20 +287,8 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
       return finalResult;
     };
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      controller.signal.addEventListener('abort', () => {
-        reject(new TokenTrimError(
-          `Compression timed out after ${OVERALL_DEADLINE_MS}ms`,
-          'COMPRESSION_TIMEOUT',
-          'compression',
-          false,
-          { deadlineMs: OVERALL_DEADLINE_MS }
-        ));
-      }, { once: true });
-    });
-
     try {
-      return await Promise.race([runPipeline(controller.signal), timeoutPromise]);
+      return await runPipeline(controller.signal);
     } catch (error) {
       if (error instanceof TokenTrimError) {
         throw error;
@@ -291,10 +342,10 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
     originalTokens: number,
     options: CompressionOptions
   ): boolean {
+    if (candidate.grossTokenReduction <= 0) return false;
     if (!currentBest) return true;
 
     const targetRatio = options.targetReductionRatio;
-    const isForceTargetMode = options.safeResultMode === false;
     
     if (targetRatio !== undefined && originalTokens > 0) {
       const candidateRatio = candidate.grossTokenReduction / originalTokens;
@@ -302,37 +353,36 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
       const candidateDistance = Math.abs(candidateRatio - targetRatio);
       const currentBestDistance = Math.abs(currentBestRatio - targetRatio);
 
-      if (isForceTargetMode) {
-        // Rank by closeness to target in Force Target Mode
-        if (Math.abs(candidateDistance - currentBestDistance) > 0.005) {
-          return candidateDistance < currentBestDistance;
-        }
-      } else {
-        const minimumRatio = options.minimumReductionRatio ?? 0;
-        const maximumRatio = options.maximumReductionRatio ?? 1;
-        const candidateIsInRange = candidateRatio >= minimumRatio && candidateRatio <= maximumRatio;
-        const currentBestIsInRange = currentBestRatio >= minimumRatio && currentBestRatio <= maximumRatio;
+      const minimumRatio = options.minimumReductionRatio ?? 0;
+      const maximumRatio = options.maximumReductionRatio ?? 1;
+      const candidateIsInRange = candidateRatio >= minimumRatio && candidateRatio <= maximumRatio;
+      const currentBestIsInRange = currentBestRatio >= minimumRatio && currentBestRatio <= maximumRatio;
 
-        // A verified candidate that fulfils the chosen preset takes precedence.
-        if (candidateIsInRange !== currentBestIsInRange) {
-          return candidateIsInRange;
-        }
+      // 1. Prefer candidates inside the selected acceptable reduction range
+      if (candidateIsInRange !== currentBestIsInRange) {
+        return candidateIsInRange;
+      }
 
-        // Within (or outside) the range, select the result closest to the requested reduction.
-        if (Math.abs(candidateDistance - currentBestDistance) > 0.005) {
-          return candidateDistance < currentBestDistance;
-        }
+      // 2. Among valid candidates, choose the candidate with the smallest absolute difference from targetOutputTokens
+      if (Math.abs(candidateDistance - currentBestDistance) > 0.005) {
+        return candidateDistance < currentBestDistance;
       }
     }
     
+    // 3. Then use semantic safety score
     if (candidate.safetyScores.overall !== currentBest.safetyScores.overall) {
       return candidate.safetyScores.overall > currentBest.safetyScores.overall;
     }
-    
-    if (candidate.grossTokenReduction !== currentBest.grossTokenReduction) {
-      return candidate.grossTokenReduction > currentBest.grossTokenReduction;
-    }
 
+    // 4. Then use instruction/technical preservation
+    if (candidate.safetyScores.instructionConfidence !== currentBest.safetyScores.instructionConfidence) {
+      return candidate.safetyScores.instructionConfidence > currentBest.safetyScores.instructionConfidence;
+    }
+    if (candidate.safetyScores.technicalIntegrity !== currentBest.safetyScores.technicalIntegrity) {
+      return candidate.safetyScores.technicalIntegrity > currentBest.safetyScores.technicalIntegrity;
+    }
+    
+    // 5. Better net savings
     if (candidate.netTokenSavings !== currentBest.netTokenSavings) {
       return candidate.netTokenSavings > currentBest.netTokenSavings;
     }
@@ -433,22 +483,53 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
     // range. Verification failures are warnings, rather than rejection reasons.
     const isAccepted = context.bestCandidatePassed;
 
-    // In Safe Result Mode, a verified candidate outside the target range is a safe fallback.
-    // In Force Target Mode this cannot happen (out-of-range candidates are filtered earlier).
+    // Determine if this is a fallback (accepted but outside target range)
+    let isFallbackResult = false;
+    let reductionRatio = 0;
+    if (isAccepted && context.originalTokens > 0) {
+      reductionRatio = actualGrossReduction / context.originalTokens;
+      const min = context.options.minimumReductionRatio ?? 0;
+      const max = context.options.maximumReductionRatio ?? 1;
+      isFallbackResult = reductionRatio < (min - 0.001) || reductionRatio > (max + 0.001); // Added slight epsilon for float rounding
+    }
 
     let rejectionReason: string | undefined;
     if (!isAccepted) {
       if (isForceTargetMode) {
         const targetPercent = (context.options.targetReductionRatio ?? 0.5) * 100;
         rejectionReason = `Unable to meet the ${Math.round(targetPercent)}% reduction target within the accepted range.`;
+      } else if (context.cloudError) {
+        // Provider failed - this is NOT a safety trade-off, it's a provider failure
+        rejectionReason = `AI compression failed: ${this.sanitizeProviderError(context.cloudError)}`;
       } else if (context.verificationResult && !context.verificationResult.passed) {
         const firstFailure = context.verificationResult.details[0];
         rejectionReason = firstFailure?.message ?? 'No candidate passed verification';
-      } else if (context.cloudError) {
-        rejectionReason = context.cloudError.message;
       } else {
         rejectionReason = 'No candidate passed verification';
       }
+    } else if (isFallbackResult) {
+      const actualPercent = +(reductionRatio * 100).toFixed(1);
+      const targetPercent = Math.round((context.options.targetReductionRatio ?? 0.5) * 100);
+      const minPercent = Math.round((context.options.minimumReductionRatio ?? 0) * 100);
+      const maxPercent = Math.round((context.options.maximumReductionRatio ?? 1) * 100);
+      const targetName = context.options.compressionTarget 
+        ? context.options.compressionTarget.charAt(0).toUpperCase() + context.options.compressionTarget.slice(1) 
+        : 'Custom';
+      
+      const diff = actualPercent > maxPercent 
+        ? `over target by ${(actualPercent - targetPercent).toFixed(1)}%` 
+        : `under target by ${(targetPercent - actualPercent).toFixed(1)}%`;
+        
+      rejectionReason = `Closest available result. ${targetName} target: ${targetPercent}% (acceptable: ${minPercent}–${maxPercent}%). Actual: ${actualPercent}% — ${diff}.`;
+    }
+
+    let fallbackReason: string | undefined;
+    if (isAccepted && context.cloudError && context.bestCandidate.provider === 'deterministic') {
+       if (context.cloudError.message.toLowerCase().includes('timeout')) {
+         fallbackReason = 'AI timeout';
+       } else {
+         fallbackReason = 'AI unavailable';
+       }
     }
 
     return {
@@ -465,7 +546,8 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
       netSavings: actualGrossReduction - context.bestCandidate.compressionOverhead,
       provider: context.bestCandidate.provider,
       mode: context.mode,
-      forcedTargetResult: context.forcedTargetResult
+      forcedTargetResult: context.forcedTargetResult,
+      fallbackReason
     };
   }
 
@@ -661,5 +743,126 @@ async compress(text: string, options: CompressionOptions): Promise<CompressionRe
     }
 
     return `Unable to meet the ${Math.round(targetPercent)}% reduction target (${Math.round(minPercent)}-${Math.round(maxPercent)}% range). Generated ${totalAttempts} candidate(s); none met target.`;
+  }
+
+  /**
+   * Force Target Mode fallback cascade.
+   * Priority: 1) AI candidate closest to target  2) Tier 0 candidate  3) deterministic prose compression
+   * Returns null only when the input is genuinely non-compressible.
+   */
+  private selectForceTargetFallback(
+    context: PipelineContext,
+    options: CompressionOptions
+  ): CompressionCandidate | null {
+    const targetRatio = options.targetReductionRatio ?? 0.35;
+
+    // 1. Pick the AI candidate closest to the target (must be shorter than original)
+    let closest: CompressionCandidate | null = null;
+    let closestDistance = Infinity;
+    for (const candidate of context.aiCandidates) {
+      if (candidate.grossTokenReduction <= 0) continue; // skip if not shorter
+      const ratio = candidate.grossTokenReduction / context.originalTokens;
+      const dist = Math.abs(ratio - targetRatio);
+      if (dist < closestDistance) {
+        closestDistance = dist;
+        closest = candidate;
+      }
+    }
+    if (closest) return closest;
+
+    // 2. Use the Tier 0 deterministic candidate
+    if (context.tier0Candidate && context.tier0Candidate.grossTokenReduction > 0) {
+      return context.tier0Candidate;
+    }
+
+    // 3. Guaranteed deterministic prose-compression fallback
+    return this.deterministicProseCompressionFallback(context);
+  }
+
+  /**
+   * Guaranteed deterministic prose-compression fallback that removes filler,
+   * duplicate wording, repeated phrases, weak intensifiers, and redundant clauses.
+   * Returns null only when the text is genuinely non-compressible.
+   */
+  private deterministicProseCompressionFallback(
+    context: PipelineContext
+  ): CompressionCandidate | null {
+    let compressed = context.originalText;
+
+    // Remove filler / weak intensifiers
+    const fillerPatterns = [
+      /\b(?:in my opinion,?|i personally|personally|i think that|i believe that|first and foremost,?)\s*/gi,
+      /\b(?:basically|actually|literally|really|very|quite|rather|somewhat|honestly|frankly|clearly)\s+/gi,
+      /\b(?:kind of|sort of|pretty much|in general|generally speaking|for the most part|more or less|as a matter of fact)\s*/gi,
+      /\b(?:complete and total|each and every|first and foremost|basic fundamentals|past history|end result|final outcome|honest truth|advance planning|plan in advance)\b/gi,
+      /\b(?:in order to|so as to|due to the fact that|because of the fact that|the fact that|the reason why|the way in which)\s*/gi,
+      /\b(?:it is important to note that|it should be noted that|at this point in time|at the present time)\s*/gi,
+      /\b(?:and that'?s the honest truth|and that is the honest truth)\s*/gi,
+    ];
+
+    // Deduplicate redundant paired phrases
+    const redundantPairs: [RegExp, string][] = [
+      [/\bcomplete and total\b/gi, 'total'],
+      [/\bbasic fundamentals\b/gi, 'fundamentals'],
+      [/\bpast history\b/gi, 'history'],
+      [/\bend result\b/gi, 'result'],
+      [/\bfinal outcome\b/gi, 'outcome'],
+      [/\bhonest truth\b/gi, 'truth'],
+      [/\bplan in advance\b/gi, 'plan'],
+      [/\badvance planning\b/gi, 'planning'],
+      [/\beach and every\b/gi, 'every'],
+      [/\bfirst and foremost\b/gi, 'first'],
+    ];
+
+    for (const [pattern, replacement] of redundantPairs) {
+      compressed = compressed.replace(pattern, replacement);
+    }
+
+    for (const pattern of fillerPatterns) {
+      compressed = compressed.replace(pattern, '');
+    }
+
+    // Normalize whitespace
+    compressed = compressed.replace(/\s{2,}/g, ' ').replace(/\s+([.,;:!?])/g, '$1').trim();
+
+    // Capitalize first letter if needed
+    if (compressed.length > 0 && compressed.charAt(0) !== compressed.charAt(0).toUpperCase()) {
+      compressed = compressed.charAt(0).toUpperCase() + compressed.slice(1);
+    }
+
+    // Only return if actually shorter
+    if (compressed.length >= context.originalText.length || compressed === context.originalText) {
+      return null;
+    }
+
+    // Estimate token reduction (rough: 4 chars ≈ 1 token)
+    const estimatedOriginalTokens = context.originalTokens;
+    const estimatedCompressedTokens = Math.ceil(compressed.length / 4);
+    const grossReduction = Math.max(0, estimatedOriginalTokens - estimatedCompressedTokens);
+
+    if (grossReduction <= 0) return null;
+
+    return {
+      id: `fallback-prose-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      originalText: context.originalText,
+      compressedText: compressed,
+      tier: 'deterministic',
+      provider: 'deterministic',
+      grossTokenReduction: grossReduction,
+      compressionOverhead: 0,
+      netTokenSavings: grossReduction,
+      safetyScores: {
+        semanticConfidence: 0.85,
+        instructionConfidence: 0.90,
+        technicalIntegrity: 1.0,
+        privacyConfidence: 1.0,
+        compressionConfidence: 0.80,
+        overall: 0.89
+      },
+      timestamp: Date.now(),
+      metadata: {
+        fallbackType: 'deterministic_prose_compression'
+      }
+    };
   }
 }

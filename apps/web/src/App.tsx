@@ -90,7 +90,8 @@ export function App() {
           processingTimeMs: result.processingTimeMs,
           safetyScore: result.safetyScores.overall,
           safeResultMode,
-          forcedTargetResult: isForcedTarget
+          forcedTargetResult: isForcedTarget,
+          fallbackReason: result.fallbackReason
         }, ...prev.history].slice(0, 12)
       };
     });

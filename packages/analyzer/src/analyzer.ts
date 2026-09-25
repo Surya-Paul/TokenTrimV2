@@ -367,8 +367,8 @@ export class InputAnalyzer {
           continue;
         }
 
-        // For SQL identifiers, only protect if it's SQL content type or looks like a SQL statement
-        if (type === 'sql_identifier' && contentType !== 'sql' && !this.hasSqlContext(text, startIndex)) {
+        // For SQL identifiers, only protect if it's SQL content type
+        if (type === 'sql_identifier' && contentType !== 'sql') {
           continue;
         }
 
@@ -384,22 +384,73 @@ export class InputAnalyzer {
       }
     }
 
-    return segments.sort((a, b) => a.startIndex - b.startIndex);
+    return this.deduplicateSegments(segments.sort((a, b) => a.startIndex - b.startIndex));
   }
 
-  /**
-   * Heuristic: checks if a keyword is in the context of structural SQL keywords
-   */
-  private hasSqlContext(text: string, index: number): boolean {
-    const windowStart = Math.max(0, index - 50);
-    const windowEnd = Math.min(text.length, index + 50);
-    const contextWindow = text.slice(windowStart, windowEnd);
+  private deduplicateSegments(segments: ProtectedSegment[]): ProtectedSegment[] {
+    const result: ProtectedSegment[] = [];
     
-    // Look for structural SQL keywords that indicate actual SQL, not just action verbs
-    const structuralSqlKeywords = /\b(?:FROM|WHERE|JOIN|TABLE|INDEX|COLUMN|INTO|VALUES|SET|INNER|LEFT|RIGHT|OUTER|GROUP BY|ORDER BY|HAVING)\b/i;
+    // Priority order for overlapping segments
+    const typePriority: Record<string, number> = {
+      api_endpoint: 10,
+      url: 9,
+      code_block: 8,
+      inline_code: 7,
+      api_key: 10,
+      token: 10,
+      private_key: 10,
+      aws_credentials: 10,
+      password: 10,
+      database_credentials: 10,
+      file_path: 5,
+      command: 6,
+      quoted_string: 4,
+      negative_instruction: 3,
+      explicit_constraint: 3,
+      function_name: 2,
+      class_name: 2,
+      variable_name: 2,
+      json_key: 2,
+      version_number: 2,
+      package_name: 2,
+      sql_identifier: 1,
+      regex: 8,
+      latex: 8
+    };
+
+    for (const segment of segments) {
+      let overlaps = false;
+      
+      for (const existing of result) {
+        if (segment.startIndex < existing.endIndex && segment.endIndex > existing.startIndex) {
+          const segmentPriority = typePriority[segment.type] || 0;
+          const existingPriority = typePriority[existing.type] || 0;
+          
+          if (segmentPriority > existingPriority) {
+            // Replace existing with higher priority segment
+            const idx = result.indexOf(existing);
+            result[idx] = segment;
+          } else if (segmentPriority === existingPriority) {
+             // If same priority, keep the longer one
+             if (segment.content.length > existing.content.length) {
+                const idx = result.indexOf(existing);
+                result[idx] = segment;
+             }
+          }
+          overlaps = true;
+          break;
+        }
+      }
+      
+      if (!overlaps) {
+        result.push(segment);
+      }
+    }
     
-    return structuralSqlKeywords.test(contextWindow);
+    return result;
   }
+
+
 
   /**
    * Heuristic: a slash-delimited string is a real regex if it has flags

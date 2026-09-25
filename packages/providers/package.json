@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tokentrim/shared": "workspace:*"
+    "@tokentrim/shared": "workspace:*",
+    "undici": "^8.11.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.12",

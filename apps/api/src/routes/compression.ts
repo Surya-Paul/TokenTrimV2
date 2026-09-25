@@ -97,7 +97,8 @@ const compressionRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) =
           actualReductionPercent,
           targetAchieved,
           safeResultMode,
-          forcedTargetResult: result.forcedTargetResult
+          forcedTargetResult: result.forcedTargetResult,
+          fallbackReason: result.fallbackReason
         }
       };
 

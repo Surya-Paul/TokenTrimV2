@@ -24,6 +24,15 @@ export class Tier0Compressor {
     
     let compressed = text;
     
+    // Create placeholders for protected segments
+    const { placeholderized, placeholders } = this.applyPlaceholders(compressed, analysis.protectedSegments);
+    compressed = placeholderized;
+
+    // Add structured-specification compression
+    if (analysis.contentType === 'coding_prompt' || analysis.contentType === 'markdown') {
+        compressed = this.compressStructuredSpec(compressed);
+    }
+    
     // Apply Tier 0 compression rules in order of safety
     compressed = this.removeExtraWhitespace(compressed, analysis);
     compressed = this.removeRedundantPhrases(compressed, analysis);
@@ -37,7 +46,10 @@ export class Tier0Compressor {
       compressed = this.compressExamples(compressed, analysis);
     }
     
-    // Ensure protected segments are intact
+    // Restore placeholders exactly
+    compressed = this.restorePlaceholders(compressed, placeholders);
+    
+    // Ensure protected segments are intact (safety check)
     compressed = this.restoreProtectedSegments(text, compressed, analysis.protectedSegments);
     
     const compressedTokens = await this.countTokens(compressed, options.targetModel);
@@ -68,6 +80,71 @@ export class Tier0Compressor {
         rulesApplied: this.getAppliedRules(text, compressed)
       }
     };
+  }
+
+  private applyPlaceholders(text: string, segments: ProtectedSegment[]): { placeholderized: string, placeholders: Record<string, string> } {
+    const placeholders: Record<string, string> = {};
+    let out = "";
+    let lastIndex = 0;
+    for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        if (!seg) continue;
+        if (seg.startIndex >= lastIndex) {
+            out += text.slice(lastIndex, seg.startIndex);
+            const placeholder = `__PROTECTED_SEGMENT_${i}__`;
+            out += placeholder;
+            placeholders[placeholder] = seg.content;
+            lastIndex = seg.endIndex;
+        }
+    }
+    out += text.slice(lastIndex);
+    return { placeholderized: out, placeholders };
+  }
+
+  private restorePlaceholders(text: string, placeholders: Record<string, string>): string {
+    let result = text;
+    for (const [placeholder, content] of Object.entries(placeholders)) {
+        // Use split/join to replace all occurrences without regex special character issues
+        result = result.split(placeholder).join(content);
+    }
+    return result;
+  }
+
+  private compressStructuredSpec(text: string): string {
+    let result = text;
+    
+    // Remove blank-line excess
+    result = result.replace(/\n{3,}/g, '\n\n');
+    
+    // Compact verbose headings
+    result = result.replace(/^(#{1,6})\s+(?:The|A|An)\s+(.+)$/gm, '$1 $2');
+    result = result.replace(/^(#{1,6})\s+Detailed\s+(?:Requirements|Specifications)\s+for\s+(.+)$/gm, '$1 $2 Requirements');
+    
+    // Convert repeated "Create/Implement/Build" wording into concise list items
+    result = result.replace(/^(\s*[-*+]\s+)(?:Create|Implement|Build|Develop|Design|Add)\s+(?:a|an|the\s+)?(.+)$/gmi, '$1$2');
+    
+    // Compact nested lists (just remove extra blank lines between list items)
+    result = result.replace(/^(\s*[-*+]\s+.+)\n\n+(?=\s*[-*+]\s+)/gm, '$1\n');
+    
+    // Merge duplicate or overlapping requirements in lists
+    const lines = result.split('\n');
+    const seenLists = new Set<string>();
+    const outLines = [];
+    for (const line of lines) {
+        if (/^\s*[-*+]\s+/.test(line)) {
+            const normalized = line.trim().toLowerCase();
+            if (!seenLists.has(normalized)) {
+                seenLists.add(normalized);
+                outLines.push(line);
+            }
+        } else {
+            outLines.push(line);
+            seenLists.clear(); // Reset on non-list
+        }
+    }
+    result = outLines.join('\n');
+    
+    return result;
   }
 
   private removeExtraWhitespace(text: string, analysis: AnalysisResult): string {

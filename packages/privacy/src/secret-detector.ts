@@ -9,6 +9,7 @@ const SECRET_PATTERNS: Array<{
   regex: RegExp;
   confidence: number;
   maskFn: (match: string) => string;
+  validateFn?: (match: RegExpExecArray) => boolean;
 }> = [
   {
     type: 'api_key',
@@ -30,7 +31,7 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'api_key',
-    regex: /\bapi[_-]?key["\s:=]+["']?([a-zA-Z0-9_-]{20,})["']?/gi,
+    regex: /\bapi[_-]?key\s*[:=]\s*["']?([a-zA-Z0-9_-]{20,})["']?/gi,
     confidence: 0.85,
     maskFn: (m) => m.slice(0, 4) + '*'.repeat(Math.max(0, m.length - 8)) + m.slice(-4)
   },
@@ -42,7 +43,7 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'aws_credentials',
-    regex: /\b(?:aws_secret_access_key|aws_access_key_id)["\s:=]+["']?([a-zA-Z0-9/+=]{40})["']?/gi,
+    regex: /\b(?:aws_secret_access_key|aws_access_key_id)\s*[:=]\s*["']?([a-zA-Z0-9/+=]{40})["']?/gi,
     confidence: 0.9,
     maskFn: (m) => m.slice(0, 4) + '*'.repeat(Math.max(0, m.length - 8)) + m.slice(-4)
   },
@@ -63,7 +64,7 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'oauth_token',
-    regex: /\baccess_token["\s:=]+["']?([a-zA-Z0-9_-]{20,})["']?/gi,
+    regex: /\baccess_token\s*[:=]\s*["']?([a-zA-Z0-9_-]{20,})["']?/gi,
     confidence: 0.8,
     maskFn: (m) => m.slice(0, 4) + '*'.repeat(Math.max(0, m.length - 8)) + m.slice(-4)
   },
@@ -81,15 +82,32 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'database_credentials',
-    regex: /\b(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^/]+\/\w+/gi,
+    regex: /\b(?:postgres(?:ql)?|mysql|mongodb|redis):\/\/[^:]+:[^@]+@[^/]+\/\w+/gi,
     confidence: 0.9,
     maskFn: (m) => m.replace(/:([^:@]+)@/, ':****@')
   },
   {
-    type: 'database_credentials',
-    regex: /\b(?:password|passwd|pwd)["\s:=]+["']?([^"'\s]{8,})["']?/gi,
+    type: 'password',
+    regex: /\b(?:password|passwd|pwd)\s*[:=]\s*["']?([^"'\s]{8,})["']?/gi,
     confidence: 0.7,
-    maskFn: (m) => m.replace(/["']?[^"'\s]{8,}["']?/, '"******"')
+    maskFn: (m) => m.replace(/["']?[^"'\s]{8,}["']?$/, '"******"'),
+    validateFn: (m) => {
+      const val = m[1] || '';
+      const valLower = val.toLowerCase();
+      // Reject exact placeholder values (or near-exact with common suffixes stripped)
+      const exactPlaceholders = [
+        'password', 'changeme', 'secret', 'example', 'placeholder',
+        'your_password', 'your_password_here', 'your-password', 'your-password-here',
+        'password_here', 'password-here', 'secret_here', 'secret-here',
+        'changeme123', 'password123', 'xxxxxxxx', '********',
+      ];
+      if (exactPlaceholders.includes(valLower)) return false;
+      // Reject template variables like <password>, ${PASSWORD}
+      if (/^<.*>$/.test(val)) return false;
+      if (/^\$\{.*\}$/.test(val)) return false;
+      if (/^\$[A-Z_]+$/.test(val)) return false;
+      return true;
+    }
   },
   {
     type: 'environment_variable',
@@ -99,9 +117,9 @@ const SECRET_PATTERNS: Array<{
   },
   {
     type: 'generic_secret',
-    regex: /\b(?:secret|token|key|password)["\s:=]+["']?([a-zA-Z0-9+/=_-]{20,})["']?/gi,
+    regex: /\b(?:secret|token|key|password)\s*[:=]\s*["']?([a-zA-Z0-9+/=_-]{20,})["']?/gi,
     confidence: 0.6,
-    maskFn: (m) => m.replace(/["']?[a-zA-Z0-9+/=_-]{20,}["']?/, '"******"')
+    maskFn: (m) => m.replace(/["']?[a-zA-Z0-9+/=_-]{20,}["']?$/, '"******"')
   }
 ];
 
@@ -124,6 +142,10 @@ export class SecretDetector {
       const regex = new RegExp(pattern.regex.source, pattern.regex.flags);
       
       while ((match = regex.exec(text)) !== null) {
+        if (pattern.validateFn && !pattern.validateFn(match)) {
+          continue;
+        }
+
         const fullMatch = match[0];
         const startIndex = match.index;
         const endIndex = startIndex + fullMatch.length;

@@ -154,7 +154,7 @@ export function CompressionPanel({ settings, onComplete }: { settings: AppSettin
               <h3 className="m-0">Result</h3>
               <div className="flex gap-12">
                 <Badge variant={result.tier === 'cloud_ai' ? 'warning' : 'primary'}>
-                  {result.provider}
+                  {result.fallbackReason ? 'deterministic fallback' : result.provider}
                 </Badge>
                 {!result.safeResultMode && (
                   <Badge variant="warning">Force Target Mode</Badge>
@@ -167,6 +167,12 @@ export function CompressionPanel({ settings, onComplete }: { settings: AppSettin
                 </Button>
               </div>
             </div>
+            
+            {result.fallbackReason && (
+              <div className="text-warning text-sm" style={{ padding: 12, marginBottom: 16, border: '1px solid var(--color-warning)', borderRadius: 4, background: 'var(--color-bg)' }}>
+                <strong>Warning:</strong> {result.fallbackReason === 'AI timeout' ? 'AI optimization timed out after 25s;' : 'AI optimization was unavailable;'} returned the best available local compression.
+              </div>
+            )}
             
             {result.forcedTargetResult && (
               <div className="text-warning text-sm" style={{ padding: 12, marginBottom: 16, border: '1px solid var(--color-warning)', borderRadius: 4, background: 'var(--color-bg)' }}>
@@ -195,8 +201,9 @@ export function CompressionPanel({ settings, onComplete }: { settings: AppSettin
 
             <p className="compression-target-note">
               {targetDefinition.label} target: {targetReductionPercent.toFixed(0)}% reduction. Actual: {actualReductionPercent.toFixed(1)}%.
-              {!result.targetAchieved && result.safeResultMode !== false && ' The safe result retained protected requirements rather than forcing the percentage.'}
-              {!result.targetAchieved && result.safeResultMode === false && ' Target could not be met within the accepted range.'}
+              {!result.targetAchieved && result.rejectionReason && <span className="text-amber-600 dark:text-amber-400"> {result.rejectionReason}</span>}
+              {!result.targetAchieved && !result.rejectionReason && result.safeResultMode !== false && ' The safe result retained protected requirements rather than forcing the percentage.'}
+              {!result.targetAchieved && !result.rejectionReason && result.safeResultMode === false && ' Target could not be met within the accepted range.'}
             </p>
 
             <textarea

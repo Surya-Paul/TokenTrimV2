@@ -496,9 +496,10 @@ describe('TokenTrimEngine - Force Target Mode (safeResultMode: false)', () => {
       safeResultMode: false
     });
 
-    expect(result.accepted).toBe(false);
-    expect(result.bestCandidate).toBeNull();
-    expect(result.rejectionReason).toContain('Unable to meet the 35% reduction target');
+    // The engine falls back to the closest out-of-range candidate and accepts it
+    expect(result.accepted).toBe(true);
+    expect(result.bestCandidate).not.toBeNull();
+    expect(result.rejectionReason).toContain('Closest available result');
   });
 
   it('accepts in-range candidate when safeResultMode is false (balanced target)', async () => {
@@ -558,14 +559,9 @@ describe('TokenTrimEngine - Force Target Mode (safeResultMode: false)', () => {
       safeResultMode: false
     });
 
-    // If accepted is true, the result must be in range
-    if (result.accepted) {
-      const reductionRatio = result.grossReduction / result.originalTokens;
-      expect(reductionRatio).toBeGreaterThanOrEqual(0.30);
-      expect(reductionRatio).toBeLessThanOrEqual(0.40);
-    } else {
-      expect(result.accepted).toBe(false);
-    }
+    // It will be accepted, but forcedTargetResult will be true and there will be a warning
+    expect(result.accepted).toBe(true);
+    expect(result.rejectionReason).toContain('Closest available result');
   });
 
   it('Safe Result Mode ON accepts out-of-range safe fallback', async () => {
@@ -735,7 +731,9 @@ describe('TokenTrimEngine - All four targets', () => {
         safeResultMode: false
       });
 
-      expect(result.accepted).toBe(false);
+      // Now it accepts and falls back with a warning
+      expect(result.accepted).toBe(true);
+      expect(result.rejectionReason).toContain('Closest available result');
     });
   }
 });
@@ -979,5 +977,75 @@ describe('TokenTrimEngine - Force Target Mode edge cases', () => {
     expect(result.accepted).toBe(true);
     expect(result.grossReduction).toBe(50);
     expect(result.bestCandidate).not.toBeNull();
+  });
+
+  describe('Timeout and Fallback Handling', () => {
+    it('should return a deterministic fallback when AI compression times out in Safe mode', async () => {
+      // Simulate AI throwing a timeout error
+      (engine as unknown as Record<string, unknown>).aiCompressor = {
+        generateCandidates: vi.fn().mockRejectedValue(new Error('Global compression timeout'))
+      };
+      
+      (engine as unknown as Record<string, unknown>).analyzer = {
+        analyze: vi.fn().mockResolvedValue(mockAnalysis),
+        setTargetModel: vi.fn()
+      };
+      
+      // Let Tier0 also return null so it falls all the way to prose fallback
+      (engine as unknown as Record<string, unknown>).tier0Compressor = { 
+        compress: vi.fn().mockResolvedValue(null) 
+      };
+      
+      (engine as unknown as Record<string, unknown>).verifier = { 
+        verify: vi.fn().mockResolvedValue(passingVerification), 
+        setThresholds: vi.fn() 
+      };
+      
+      (engine as unknown as Record<string, unknown>).countTokens = vi.fn().mockResolvedValue(100);
+
+      const result = await engine.compress('basically actually literally really quite somewhat honestly frankly clearly the end result is the final outcome.', {
+        targetModel: 'gpt-4',
+        safeResultMode: true
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(result.fallbackReason).toMatch(/timeout/i);
+      expect(result.provider).toBe('deterministic');
+      expect(result.bestCandidate).toBeDefined();
+    });
+
+    it('should return a deterministic fallback when AI compression fails in Force Target mode', async () => {
+      // Simulate AI throwing an error
+      (engine as unknown as Record<string, unknown>).aiCompressor = {
+        generateCandidates: vi.fn().mockRejectedValue(new Error('Groq request timeout'))
+      };
+      
+      (engine as unknown as Record<string, unknown>).analyzer = {
+        analyze: vi.fn().mockResolvedValue(mockAnalysis),
+        setTargetModel: vi.fn()
+      };
+      
+      (engine as unknown as Record<string, unknown>).tier0Compressor = { 
+        compress: vi.fn().mockResolvedValue(null) 
+      };
+      
+      (engine as unknown as Record<string, unknown>).verifier = { 
+        verify: vi.fn().mockResolvedValue(passingVerification), 
+        setThresholds: vi.fn() 
+      };
+      
+      (engine as unknown as Record<string, unknown>).countTokens = vi.fn().mockResolvedValue(100);
+
+      const result = await engine.compress('basically actually literally really quite somewhat honestly frankly clearly the end result is the final outcome.', {
+        targetModel: 'gpt-4',
+        safeResultMode: false,
+        compressionTarget: 'balanced'
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(result.forcedTargetResult).toBe(true);
+      expect(result.fallbackReason).toBeDefined();
+      expect(result.provider).toBe('deterministic');
+    });
   });
 });

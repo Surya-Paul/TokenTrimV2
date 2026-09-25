@@ -25,7 +25,7 @@ function createDefaultEngine(): TokenTrimEngine {
     groqConfig: config.GROQ_API_KEY ? {
       apiKey: config.GROQ_API_KEY,
       model: config.GROQ_MODEL,
-      timeoutMs: 8000,
+      timeoutMs: 60000,
       maxRetries: 1,
       retryDelayMs: 1000
     } : undefined,

@@ -140,10 +140,10 @@ describe('InputAnalyzer', () => {
       expect(result.protectedSegments.some(s => s.type === 'sql_identifier')).toBe(true);
     });
 
-    it('protects SQL keywords in coding prompts containing inline SQL', async () => {
+    it('does not protect SQL keywords in coding prompts unless inside code blocks', async () => {
       const text = 'Write a function that executes SELECT id, name FROM employees WHERE department = "Sales"';
       const result = await analyzer.analyze(text);
-      expect(result.protectedSegments.some(s => s.type === 'sql_identifier')).toBe(true);
+      expect(result.protectedSegments.some(s => s.type === 'sql_identifier')).toBe(false);
     });
   });
 

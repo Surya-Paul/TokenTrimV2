@@ -8,6 +8,7 @@ import {
   GroqConfig,
   ProviderType
 } from '@tokentrim/shared';
+import { Agent, request } from 'undici';
 
 // ============================================================================
 // Base Provider Interface
@@ -88,6 +89,7 @@ export class GroqProvider extends BaseProvider {
     lastFailure: number;
     open: boolean;
   } = { failures: 0, lastFailure: 0, open: false };
+  private agent: Agent;
 
   constructor(config: GroqConfig) {
     super();
@@ -95,6 +97,16 @@ export class GroqProvider extends BaseProvider {
       baseUrl: 'https://api.groq.com/openai/v1',
       ...config
     };
+    // Force IPv4 — works around local IPv6 routing quirk where undici hangs instead of falling back
+    this.agent = new Agent({ 
+      connect: { family: 4 },
+      keepAliveTimeout: 10_000,
+      keepAliveMaxTimeout: 60_000
+    });
+  }
+
+  async destroy(): Promise<void> {
+    await this.agent.close();
   }
 
   async generate(prompt: string, options: GenerateOptions): Promise<ProviderResponse> {
@@ -104,7 +116,8 @@ export class GroqProvider extends BaseProvider {
         this.circuitBreakerState.open = false;
         this.circuitBreakerState.failures = 0;
       } else {
-        throw new Error('Groq circuit breaker open - cooling down');
+        const remainingSec = Math.ceil((60000 - timeSinceFailure) / 1000);
+        throw new Error(`Groq circuit breaker open - retry in ${remainingSec}s`);
       }
     }
 
@@ -124,7 +137,7 @@ export class GroqProvider extends BaseProvider {
       response_format: options.responseFormat === 'json' ? { type: 'json_object' } : undefined
     };
 
-    // Use external signal if provided (for overall deadline), otherwise create local one
+    // Use external signal if provided (for overall deadline)
     const controller = options.signal 
       ? new AbortController()
       : null;
@@ -135,60 +148,73 @@ export class GroqProvider extends BaseProvider {
     }
     
     // Local timeout controller for per-request timeout
+    console.log('[Groq] Using timeoutMs:', this.config.timeoutMs);
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => timeoutController.abort(), this.config.timeoutMs);
     
     // Combine signals - abort if either fires
-    const combinedSignal = AbortSignal.any([
-      controller?.signal || AbortSignal.abort(),
-      timeoutController.signal
-    ]);
+    // Only include external signal if it was provided (controller is not null)
+    const signals = [timeoutController.signal];
+    if (controller) {
+      signals.push(controller.signal);
+    }
+    const combinedSignal = AbortSignal.any(signals);
 
     let lastError: Error | null = null;
     
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt++) {
       console.log(`[Groq] START attempt=${attempt + 1}/${this.config.maxRetries + 1} model=${this.config.model} level=${options.metadata?.['level'] ?? 'unknown'} candidate=${options.metadata?.['candidateIndex'] ?? 'unknown'}`);
       try {
-        const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.config.apiKey}`
-          },
-          body: JSON.stringify(requestBody),
-          signal: combinedSignal
-        });
+        const { body, statusCode, headers } = await request(
+          `${this.config.baseUrl}/chat/completions`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${this.config.apiKey}`
+            },
+            body: JSON.stringify(requestBody),
+            signal: combinedSignal,
+            dispatcher: this.agent
+          }
+        );
 
         clearTimeout(timeoutId);
 
-        if (!response.ok) {
-          const errorText = await response.text();
+        if (!statusCode || statusCode >= 400) {
+          const errorText = await body.text();
           
-          if (response.status === 401) {
+          if (statusCode === 401) {
             this.status = 'error';
+            console.error('[Groq] FAIL', { attempt: attempt + 1, status: 401, error: errorText, level: options.metadata?.['level'], candidateIndex: options.metadata?.['candidateIndex'] });
             throw new Error('Invalid Groq API key');
           }
           
-          if (response.status === 429) {
+          if (statusCode === 429) {
             this.status = 'rate_limited';
-            const retryAfter = response.headers.get('retry-after');
-            const delay = retryAfter ? parseInt(retryAfter) * 1000 : this.config.retryDelayMs * Math.pow(2, attempt);
+            const retryAfter = headers['retry-after'];
+            const retryAfterValue = Array.isArray(retryAfter) ? retryAfter[0] : retryAfter;
+            const delay = retryAfterValue ? parseInt(retryAfterValue) * 1000 : this.config.retryDelayMs * Math.pow(2, attempt);
+            console.error('[Groq] FAIL', { attempt: attempt + 1, status: 429, error: errorText, retryAfterHeader: retryAfterValue, delayMs: delay, level: options.metadata?.['level'], candidateIndex: options.metadata?.['candidateIndex'] });
             await this.sleep(delay);
             lastError = new Error(`Rate limited: ${errorText}`);
             continue;
           }
           
-          if (response.status >= 500) {
+          if (statusCode && statusCode >= 500) {
             this.status = 'unavailable';
-            await this.sleep(this.config.retryDelayMs * Math.pow(2, attempt));
-            lastError = new Error(`Server error: ${response.status} ${errorText}`);
+            const backoffMs = this.config.retryDelayMs * Math.pow(2, attempt);
+            console.error('[Groq] FAIL', { attempt: attempt + 1, status: statusCode, error: errorText, backoffMs, level: options.metadata?.['level'], candidateIndex: options.metadata?.['candidateIndex'] });
+            await this.sleep(backoffMs);
+            lastError = new Error(`Server error: ${statusCode} ${errorText}`);
             continue;
           }
           
-          throw new Error(`Groq API error: ${response.status} ${errorText}`);
+          console.error('[Groq] FAIL', { attempt: attempt + 1, status: statusCode, error: errorText, level: options.metadata?.['level'], candidateIndex: options.metadata?.['candidateIndex'] });
+          throw new Error(`Groq API error: ${statusCode} ${errorText}`);
         }
 
-        const data = (await response.json()) as GroqChatResponse;
+        const data = (await body.json()) as GroqChatResponse;
         
         // Success - reset circuit breaker
         this.circuitBreakerState.failures = 0;
@@ -210,7 +236,16 @@ export class GroqProvider extends BaseProvider {
         lastError = error instanceof Error ? error : new Error(String(error));
         
         if (error instanceof Error && error.name === 'AbortError') {
-          lastError = new Error('Groq request timeout');
+          if (controller?.signal.aborted) {
+            lastError = new Error('Global compression timeout');
+            console.error('[Groq] FAIL', { attempt: attempt + 1, error: 'global timeout', isTimeout: true, level: options.metadata?.['level'], candidateIndex: options.metadata?.['candidateIndex'] });
+            throw lastError; // Do not retry if the overall deadline passed
+          } else {
+            lastError = new Error('Groq request timeout');
+            console.error('[Groq] FAIL', { attempt: attempt + 1, error: 'request timeout', isTimeout: true, level: options.metadata?.['level'], candidateIndex: options.metadata?.['candidateIndex'] });
+          }
+        } else {
+          console.error('[Groq] FAIL', { attempt: attempt + 1, error: lastError.message, isTimeout: false, level: options.metadata?.['level'], candidateIndex: options.metadata?.['candidateIndex'] });
         }
         
         // Don't retry on certain errors
@@ -233,6 +268,7 @@ export class GroqProvider extends BaseProvider {
       this.status = 'unavailable';
     }
     
+    console.error('[Groq] FAIL FINAL', { totalAttempts: this.config.maxRetries + 1, finalError: lastError?.message, circuitBreakerFailures: this.circuitBreakerState.failures, circuitBreakerOpen: this.circuitBreakerState.open, level: options.metadata?.['level'], candidateIndex: options.metadata?.['candidateIndex'] });
     throw lastError || new Error('Groq generation failed after retries');
   }
 
@@ -248,26 +284,30 @@ export class GroqProvider extends BaseProvider {
       const timeoutId = setTimeout(() => controller.abort(), 5000);
       
       const start = Date.now();
-      const response = await fetch(`${this.config.baseUrl}/models`, {
-        headers: { 'Authorization': `Bearer ${this.config.apiKey}` },
-        signal: controller.signal
-      });
+      const { body, statusCode } = await request(
+        `${this.config.baseUrl}/models`,
+        {
+          headers: { 'Authorization': `Bearer ${this.config.apiKey}` },
+          signal: controller.signal,
+          dispatcher: this.agent
+        }
+      );
       clearTimeout(timeoutId);
       
       const latencyMs = Date.now() - start;
       
-      if (!response.ok) {
-        if (response.status === 401) {
+      if (!statusCode || statusCode >= 400) {
+        if (statusCode === 401) {
           this.status = 'error';
-        } else if (response.status === 429) {
+        } else if (statusCode === 429) {
           this.status = 'rate_limited';
         } else {
           this.status = 'unavailable';
         }
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(`HTTP ${statusCode}`);
       }
 
-      const data = (await response.json()) as GroqModelsResponse;
+      const data = (await body.json()) as GroqModelsResponse;
       const modelAvailable = data.data.some(m => m.id === this.config.model);
 
       if (modelAvailable) {
@@ -322,10 +362,15 @@ export class GroqProvider extends BaseProvider {
 
   async listModels(): Promise<string[]> {
     try {
-      const response = await fetch(`${this.config.baseUrl}/models`, {
-        headers: { 'Authorization': `Bearer ${this.config.apiKey}` }
-      });
-      const data = (await response.json()) as GroqModelsResponse;
+      const { body, statusCode } = await request(
+        `${this.config.baseUrl}/models`,
+        {
+          headers: { 'Authorization': `Bearer ${this.config.apiKey}` },
+          dispatcher: this.agent
+        }
+      );
+      if (!statusCode || statusCode >= 400) return [];
+      const data = (await body.json()) as GroqModelsResponse;
       return data.data.map(m => m.id);
     } catch {
       return [];

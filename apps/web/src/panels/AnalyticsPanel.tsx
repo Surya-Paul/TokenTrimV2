@@ -30,6 +30,7 @@ export interface CompressionHistoryItem {
   safetyScore: number;
   safeResultMode: boolean;
   forcedTargetResult: boolean;
+  fallbackReason?: string;
 }
 
 export interface SessionStats {
@@ -261,6 +262,7 @@ export function AnalyticsPanel({ stats, onReset }: { stats: SessionStats; onRese
                       <th>Tokens</th>
                       <th>Safety</th>
                       <th>Provider</th>
+                      <th>Fallback</th>
                       <th>Time</th>
                     </tr>
                   </thead>
@@ -276,6 +278,7 @@ export function AnalyticsPanel({ stats, onReset }: { stats: SessionStats; onRese
                         <td>{formatNumber(item.originalTokens)} → {formatNumber(item.compressedTokens)}</td>
                         <td>{item.accepted ? formatPercentage(item.safetyScore * 100) : '—'}</td>
                         <td>{item.provider}</td>
+                        <td>{item.fallbackReason ? <span className="text-warning text-sm" title={item.fallbackReason}>⚠️ {item.fallbackReason === 'AI timeout' ? 'Timeout' : 'Unavailable'}</span> : '—'}</td>
                         <td>{formatTime(item.processingTimeMs)}</td>
                       </tr>
                     ))}

@@ -165,6 +165,7 @@ export interface CompressionResult {
   provider: ProviderType;
   mode: ProcessingMode;
   forcedTargetResult?: boolean;
+  fallbackReason?: string;
 }
 
 export interface CompressionOptions {
@@ -606,6 +607,7 @@ export interface ApiCompressionResponse {
     targetAchieved?: boolean;
     safeResultMode?: boolean;
     forcedTargetResult?: boolean;
+    fallbackReason?: string;
   } | null;
   error?: ApiError;
 }
